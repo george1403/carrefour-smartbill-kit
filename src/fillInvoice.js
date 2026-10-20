@@ -113,8 +113,9 @@ function classify(rows, orderNo, series, netTotal = null, excludeDraftIds = []) 
 }
 async function alreadyIssued(page, profile, order, cf) {
   for (const f of ['issued.json', 'drafts.json']) {
-    const file = path.join(profile.dirs.out, f); const L = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    const file = path.join(profile.dirs.out, f); const L = require('./fsx').readLedger(file);
     const nzk = k => String(k).replace(/^0+/, ''); const k = Object.keys(L).find(x => nzk(x) === nzk(order.orderNo)); const e = k && L[k];
+    if (e && (e.status === 'pending' || e.status === 'unknown')) return { kind: 'unclear', text: `Comanda ${order.orderNo}: o salvare anterioara in SmartBill s-a intrerupt sau e neclara (${f}, stare ${e.status}). Verifica in SmartBill (Facturi si Ciorne) daca exista deja factura/ciorna; nu continui automat.` };
     if (e && e.status !== 'pending' && e.status !== 'unknown') return f === 'issued.json'
       ? { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata: factura ${e.number || 'id ' + e.invoiceId}. Nu o mai completez.` }
       : { kind: 'draft', draftId: e.invoiceId ? String(e.invoiceId) : null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Ciorne.` };
@@ -164,6 +165,9 @@ async function run(profile, opts = {}) {
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
     plan.lines.push({ ...l, smartbill: m });
   }
+  // automat/--issue: a line without a SmartBill product is never ISSUED unattended (free text needs a person's eye); drafts are fine
+  if (opts.issue && !draftOnly && plan.lines.some(l => l.freeText) && !cfg.auto?.allowFreeText)
+    throw Object.assign(new Error(`Comanda ${order.orderNo} are produse care nu sunt in lista SmartBill: ${plan.lines.filter(l => l.freeText).map(l => `"${l.name}" (EAN ${l.ean || '-'})`).join(', ')}. Nu emit factura automat. Adauga produsul in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, sau fa o ciorna (optiunea 2) si verific-o.`), { code: 'NEEDS_HUMAN' });
   wf(path.join(out, 'plan.json'), JSON.stringify(plan, null, 2));
   log(`Plan: comanda ${order.orderNo}, magazin ${order.store.name} GLN ${order.store.gln}, ${plan.lines.length} linii, serie ${plan.series}, aviz ${plan.despatchId}`);
 
@@ -171,7 +175,7 @@ async function run(profile, opts = {}) {
   const page = s.page; page.__guard = s.guard; const shot = async n => { const f = path.join(out, `${n}.png`); await page.screenshot({ path: f, fullPage: true }); return f; };
   const result = { out, plan: path.join(out, 'plan.json'), mode: issue ? 'issue' : 'fill-only' };
   try {
-    { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
+    { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: dup.kind === 'unclear' ? 'NEEDS_HUMAN' : 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
     await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
 
     // header
@@ -373,10 +377,12 @@ const D = { downloadXml: (...a) => downloadXml(...a), finalizeDraft: (...a) => f
 
 async function issueNow(page, s, profile, order, shot, log, { draftOnly = false } = {}) {
   const ledgerFile = path.join(profile.dirs.out, draftOnly ? 'drafts.json' : 'issued.json');
-  const L = fs.existsSync(ledgerFile) ? JSON.parse(fs.readFileSync(ledgerFile, 'utf8')) : {};
-  if (L[order.orderNo]) throw new Error(`STOP: comanda ${order.orderNo} figureaza deja in jurnal (${L[order.orderNo].status})`);
+  const { readLedger } = require('./fsx'); const nzk = k => String(k).replace(/^0+/, '');
+  const L = readLedger(ledgerFile); const prevKey = Object.keys(L).find(k => nzk(k) === nzk(order.orderNo));
+  if (prevKey) throw kerr('NEEDS_HUMAN', `STOP: comanda ${order.orderNo} figureaza deja in jurnalul ${path.basename(ledgerFile)} (stare ${L[prevKey].status}): o salvare anterioara s-a intrerupt sau e neclara. Verifica in SmartBill (Facturi si Ciorne); nu reincerc automat.`);
   L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; wf(ledgerFile, JSON.stringify(L, null, 2));
-  const save = () => wf(ledgerFile, JSON.stringify(L, null, 2));
+  // merge-save: re-read the file and replace ONLY this order, so a parallel run (e.g. menu 2 while 'auto' runs) never loses entries
+  const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
   const before = page.url();
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
@@ -399,7 +405,7 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
   log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw new Error('ATENTIE: --draft-only dar SmartBill nu a raspuns cu ciorna: ' + JSON.stringify({ status: rec.status, id: rec.invoiceId })); }
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Ciorne (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {

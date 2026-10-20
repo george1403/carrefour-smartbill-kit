@@ -15,10 +15,23 @@ const readJ = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 /** One run at a time. A lock left by a killed run (Mac asleep / laptop closed / power cut) is ignored when its process is gone or after 2 h. */
+// Atomic (O_EXCL create) so two runs started at the same second cannot both get it; a heartbeat refreshes the
+// lock every minute, so a long bulk run (hours) is never treated as stale by the hourly 'auto'.
+const LOCK_STALE_MS = 2 * 3600e3; const LOCK_BEAT_MS = 60e3;
 function lock(dir) {
-  const f = path.join(dir, 'auto.lock');
-  try { const st = fs.statSync(f); const pid = Number(fs.readFileSync(f, 'utf8')); if (Date.now() - st.mtimeMs < 2 * 3600e3 && pid && pid !== process.pid && alive(pid)) return null; } catch {}
-  wf(f, String(process.pid)); return () => { try { if (Number(fs.readFileSync(f, 'utf8')) === process.pid) fs.unlinkSync(f); } catch {} };
+  const f = path.join(dir, 'auto.lock'); fs.mkdirSync(dir, { recursive: true });
+  for (let i = 0; i < 2; i++) {
+    try { const fd = fs.openSync(f, 'wx'); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); break; }
+    catch (e) { if (e.code !== 'EEXIST') throw e;
+      let st, pid; try { st = fs.statSync(f); pid = Number(fs.readFileSync(f, 'utf8')); } catch { continue; }
+      const fresh = Date.now() - st.mtimeMs < LOCK_STALE_MS;
+      if (pid === process.pid) break;
+      if (fresh && pid && alive(pid)) return null;
+      if (fresh && !pid && Date.now() - st.mtimeMs < 60e3) return null; // being written right now
+      try { fs.unlinkSync(f); } catch {} if (i === 1) return null; }
+  }
+  const beat = setInterval(() => { try { const t = new Date(); fs.utimesSync(f, t, t); } catch {} }, LOCK_BEAT_MS); beat.unref();
+  return () => { clearInterval(beat); try { if (Number(fs.readFileSync(f, 'utf8')) === process.pid) fs.unlinkSync(f); } catch {} };
 }
 
 /** Clear Romanian notice when the Carrefour session expired during an automatic check: file + desktop notification (max once per 6 h). */
@@ -50,14 +63,18 @@ function desktopNotice(short) {
 }
 /** automat: hard ceiling on invoices per run, whatever the profile says (default 3). */
 const AUTOMAT_MAX = 10;
-const maxPerRun = (cfg, mode) => mode === 'automat' ? Math.max(1, Math.min(AUTOMAT_MAX, Number(cfg.auto?.maxPerRun) || 3)) : (cfg.auto?.maxPerRun ?? 10);
+const maxPerRun = (cfg, mode) => mode === 'automat' ? Math.max(1, Math.min(AUTOMAT_MAX, Math.floor(Number(cfg.auto?.maxPerRun)) || 3))
+  : Math.max(1, Math.min(50, Math.floor(Number(cfg.auto?.maxPerRun ?? 10)) || 10));
+const localDay = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
 
 /** Decide, without touching SmartBill, which portal orders are candidates. */
-function plan(orders, { cfg, ledgers, state, today = new Date().toISOString().slice(0, 10) }) {
-  const a = cfg.auto || {}; const start = a.startFrom || today; const maxAge = a.maxAgeDays ?? 14;
+function plan(orders, { cfg, ledgers, state, today = localDay() }) {
+  const a = cfg.auto || {}; const start = /^\d{4}-\d{2}-\d{2}$/.test(String(a.startFrom || '')) && !isNaN(new Date(a.startFrom)) ? a.startFrom : today;
+  const ma = Number(a.maxAgeDays ?? 14); const maxAge = Number.isFinite(ma) ? Math.max(0, Math.min(365, ma)) : 14;
   const minDate = new Date(Math.max(new Date(start), new Date(today) - maxAge * 864e5)).toISOString().slice(0, 10);
   const known = new Set([...Object.keys(ledgers.issued || {}), ...Object.keys(ledgers.drafts || {})].map(nz));
-  return orders.map(o => {
+  const seen = new Set();
+  return orders.filter(o => o && o.orderNo && !seen.has(nz(o.orderNo)) && seen.add(nz(o.orderNo))).map(o => {
     const d = iso(o.date); let skip = null;
     if (o.invoiceNumbers && String(o.invoiceNumbers).trim()) skip = `deja facturata la Carrefour (${o.invoiceNumbers})`;
     else if (known.has(nz(o.orderNo))) skip = 'deja in registrul local';
@@ -89,7 +106,7 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
     catch (e) { if (e.code === 'CAPTCHA') { notifyLogin(out, L); summary.errors.push({ captcha: true }); summary.loginNeeded = true; summary.exit = 3; return summary; }
       const c = require('./errors').classify(e); summary.exit = c.exit; throw e; }
     { const n = path.join(out, '..', '..', 'ATENTIE-autentificare-Carrefour.txt'); if (fs.existsSync(n)) { fs.mkdirSync(path.join(out, 'notificari'), { recursive: true }); mv(n, path.join(out, 'notificari', `rezolvat-${Date.now()}.txt`)); } }
-    const ledgers = { issued: readJ(path.join(out, 'issued.json'), {}), drafts: readJ(path.join(out, 'drafts.json'), {}) };
+    const { readLedger } = require('./fsx'); const ledgers = { issued: readLedger(path.join(out, 'issued.json')), drafts: readLedger(path.join(out, 'drafts.json')) };
     const p = plan(orders, { cfg, ledgers, state });
     const todo = p.filter(x => !x.skip).slice(0, maxPerRun(cfg, mode));
     summary.skipped = p.filter(x => x.skip).map(x => ({ orderNo: x.orderNo, why: x.skip }));
@@ -106,10 +123,11 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
         if (e.code === 'CAPTCHA' || e.code === 'WRONG_ACCOUNT') { if (e.code === 'CAPTCHA') { notifyLogin(out, L); summary.loginNeeded = true; } summary.exit = require('./errors').classify(e).exit; summary.errors.push({ orderNo: o.orderNo, error: e.message.split('\n')[0] }); break; }
         const msg = e.message.split('\n')[0]; const st = state[nz(o.orderNo)] = state[nz(o.orderNo)] || { fails: 0 };
         if (e.code === 'DUPLICATE') { st.needsHuman = e.kind === 'cancelled'; st.reason = msg; summary.skipped.push({ orderNo: o.orderNo, why: msg }); L(`  ${o.orderNo}: sarita - ${msg}`); }
-        else { st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG' || st.fails >= 3) { st.needsHuman = true; st.reason = st.fails >= 3 ? `3 incercari esuate: ${msg}` : msg; } summary.errors.push({ orderNo: o.orderNo, error: msg }); L(`  ${o.orderNo}: EROARE - ${msg}${st.needsHuman ? ' (nu mai incerc automat)' : ''}`); }
+        else { st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG' || e.code === 'SAVE_UNKNOWN' || st.fails >= 3) { st.needsHuman = true; st.reason = st.fails >= 3 ? `3 incercari esuate: ${msg}` : msg; } summary.errors.push({ orderNo: o.orderNo, error: msg }); L(`  ${o.orderNo}: EROARE - ${msg}${st.needsHuman ? ' (nu mai incerc automat)' : ''}`); }
         // automat: any doubt (unknown save result, XML check, needs a person) stops the WHOLE run, not only this order
         if (mode === 'automat' && e.code !== 'DUPLICATE') { st.needsHuman = true; st.reason = st.reason || msg; summary.stopped = msg; summary.exit = 11; if (e.code === 'SAVE_UNKNOWN') summary.saveUnknown = { orderNo: o.orderNo, invoiceId: e.invoiceId || null }; L('Mod AUTOMAT: m-am oprit dupa aceasta eroare (nu continui cu alte comenzi).'); break; }
-        if (/403|Forbidden/.test(msg)) { L('SmartBill limiteaza temporar accesul; continui la urmatoarea verificare.'); break; }
+        if (/\b403\b|Forbidden/.test(msg)) { L('SmartBill limiteaza temporar accesul (403); ma opresc si reiau la urmatoarea verificare.'); break; }
+        if (require('./errors').classify(e).exit === 5) { summary.exit = 5; L('Internetul sau SmartBill nu raspunde; ma opresc si reiau la urmatoarea verificare.'); break; }
       }
       await new Promise(r => setTimeout(r, Number(process.env.KIT_RATE_MS || 30000))); // SmartBill rate limit (tests: KIT_RATE_MS)
     }

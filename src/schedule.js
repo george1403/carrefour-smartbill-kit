@@ -11,7 +11,7 @@ function install({ every = 60, profile = null, dryRun = false } = {}) {
   fs.mkdirSync(path.join(ROOT, '.runtime'), { recursive: true });
   if (process.platform === 'win32') {
     const cmd = path.join(ROOT, '.runtime', 'auto-task.cmd');
-    wf(cmd, `@echo off\r\nset "KIT_NO_PAUSE=1"\r\nset "KIT_UNATTENDED=1"\r\ncall "${path.join(ROOT, 'run.bat')}" auto ${pa.join(' ')}\r\n`);
+    wf(cmd, `@echo off\r\nset "KIT_NO_PAUSE=1"\r\nset "KIT_UNATTENDED=1"\r\ncall "%~dp0..\\run.bat" auto ${pa.join(' ')}\r\n`);
     const a = ['/Create', '/F', '/TN', NAME, '/SC', 'MINUTE', '/MO', String(every), '/TR', `"${cmd}"`];
     if (!dryRun) sh('schtasks', a);
     return `Programat: Windows Task Scheduler "${NAME}", la fiecare ${every} minute (oprire: run.bat schedule --remove).`;

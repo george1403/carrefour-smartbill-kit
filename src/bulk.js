@@ -27,6 +27,8 @@ function bulkPlan(orders, { ledgers = {}, state = {} } = {}) {
     const iss = find(ledgers.issued, o.orderNo); const dr = find(ledgers.drafts, o.orderNo); const st = state[nz(o.orderNo)];
     if (o.invoiceNumbers && String(o.invoiceNumbers).trim()) return { ...base, skip: `deja facturata la Carrefour (${o.invoiceNumbers})` };
     if (iss && iss.status !== 'pending' && iss.status !== 'unknown') return { ...base, skip: `deja in registrul facturilor emise (${iss.number || 'id ' + (iss.invoiceId || '?')})` };
+    // an interrupted / unclear earlier save (crash, timeout): an invoice or draft MAY exist -> a person checks, never redone in bulk
+    if (iss || (dr && (dr.status === 'pending' || dr.status === 'unknown'))) return { ...base, skip: `salvare neclara intr-o rulare anterioara (${(iss || dr).status}); verifica in SmartBill (Facturi si Ciorne) comanda ${o.orderNo}` };
     if (/anulat|respins|refuzat|cancel|reject/i.test(o.status || '')) return { ...base, skip: `stare portal: ${o.status}` };
     if (st && st.needsHuman) return { ...base, skip: 'necesita verificare manuala: ' + (st.reason || '') };
     if (dr && dr.invoiceId && dr.status !== 'pending' && dr.status !== 'unknown') return { ...base, draft: String(dr.invoiceId) };
@@ -68,7 +70,7 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
     let orders;
     try { orders = (await require('./carrefourPortal').discoverCarrefour(profile, { maxDetails: 0, log: () => {} })).orders || []; }
     catch (e) { if (e.code === 'CAPTCHA') { notifyLogin(out, L); rep.loginNeeded = true; rep.exit = 3; rep.errors.push({ error: e.message.split('\n')[0] }); return rep; } throw e; }
-    const ledgers = { issued: readJ(path.join(out, 'issued.json'), {}), drafts: readJ(path.join(out, 'drafts.json'), {}) };
+    const { readLedger } = require('./fsx'); const ledgers = { issued: readLedger(path.join(out, 'issued.json')), drafts: readLedger(path.join(out, 'drafts.json')) };
     const p = bulkPlan(orders, { ledgers, state });
     rep.portalOrders = orders.length;
     for (const x of p) { if (x.skip) rep.skipped.push({ orderNo: x.orderNo, why: x.skip }); else if (x.draft) rep.alreadyDraft.push({ orderNo: x.orderNo, draftId: x.draft, why: `are deja ciorna (id ${x.draft})` }); }
@@ -95,9 +97,11 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
           if (e.code === 'DUPLICATE' && e.kind === 'draft') { const id = e.draftId || (msg.match(/\(id (\d+)/) || [])[1] || '?'; rep.alreadyDraft.push({ orderNo: o.orderNo, draftId: id, why: `are deja ciorna (id ${id})` }); L(`  ${o.orderNo}: are deja ciorna (id ${id}) - nu o dublez`); continue; }
           const st = state[nz(o.orderNo)] = state[nz(o.orderNo)] || { fails: 0 };
           if (e.code === 'DUPLICATE') { if (e.kind === 'cancelled') { st.needsHuman = true; st.reason = msg; } rep.skipped.push({ orderNo: o.orderNo, why: msg }); L(`  ${o.orderNo}: sarita - ${msg}`); continue; }
-          st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG') { st.needsHuman = true; st.reason = msg; }
+          st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG' || e.code === 'SAVE_UNKNOWN') { st.needsHuman = true; st.reason = msg; }
           rep.errors.push({ orderNo: o.orderNo, error: msg }); L(`  ${o.orderNo}: EROARE - ${msg}`);
-          if (/403|Forbidden/.test(msg)) { stop = 'SmartBill limiteaza temporar accesul (403)'; L('SmartBill limiteaza temporar accesul; ma opresc. Reia optiunea mai tarziu (ce e facut nu se dubleaza).'); }
+          if (/\b403\b|Forbidden/.test(msg)) { stop = 'SmartBill limiteaza temporar accesul (403)'; L('SmartBill limiteaza temporar accesul; ma opresc. Reia optiunea mai tarziu (ce e facut nu se dubleaza).'); }
+          else if (require('./errors').classify(e).exit === 5) { stop = 'fara internet / SmartBill nu raspunde'; rep.exit = 5; L('Internetul sau SmartBill nu raspunde; ma opresc. Reia optiunea 9 mai tarziu (ce e facut nu se dubleaza).'); }
+          else if (e.code === 'SAVE_UNKNOWN') { stop = msg; rep.exit = 11; L('Salvare neclara in SmartBill: ma opresc ca sa verifici tu (vezi mesajul).'); }
         } finally { if (!stop) await new Promise(r => setTimeout(r, rate)); }
       }
     }
