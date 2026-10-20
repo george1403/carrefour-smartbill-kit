@@ -183,6 +183,7 @@ const { wf, readLedger } = require('../src/fsx');
     const r = spawnSync('/bin/bash', ['-c', 'source "$1/scripts/env-unix.sh"; command -v node', '_', kit], { encoding: 'utf8', env: { PATH: sb, HOME: path.join(tmp, 'acasa-goala') } });
     assert(r.stdout.trim() === path.join(nd, 'node'), JSON.stringify(r.stdout + r.stderr)); return 'gasit: ' + r.stdout.trim().slice(-30); });
   await T('C32', 'Instalare Mac: disc plin / folder read-only -> mesaj clar, FARA sfatul gresit "verifica internetul"', () => {
+    if (process.platform === 'win32') return 'sarit pe Windows (script Mac)';
     const s = fs.readFileSync(path.join(ROOT, 'scripts', 'install-unix.sh'), 'utf8'); const pf = path.join(ROOT, 'install.ps1'); const p = fs.existsSync(pf) ? fs.readFileSync(pf, 'utf8') : null;
     assert(/LOCAL_ERR=1 fail "Nu pot scrie/.test(s) && /LOCAL_ERR=1 fail "Pe disc/.test(s) && /NEED_KB=300000/.test(s), 'unix');
     const r = spawnSync('/bin/bash', ['-c', 'say(){ echo "$*"; }; ' + s.match(/fail\(\) \{[\s\S]*?\n\}/)[0] + '; LOCAL_ERR=1 fail "disc"'], { encoding: 'utf8' });

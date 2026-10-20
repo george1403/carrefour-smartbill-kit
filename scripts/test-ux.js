@@ -37,7 +37,7 @@ const ESC = /\x1b\[/;
   await T('X7', 'Ghid + mesaje: NICIO comanda de scris pentru producatori', () => {
     const g = fs.readFileSync(path.join(ROOT, 'docs', 'GHID_CONFIGURARE.md'), 'utf8');
     const bad = g.split('\n').filter(l => /node |bin\/kit|npm |npx |\s--[a-z]|terminal|linia de comanda|\.\/run|\.\/install|run\.(bat|sh|command) [a-z]|xattr|powershell/i.test(l)); assert(!bad.length, 'ghid: ' + bad[0]);
-    const user = []; for (const f of fs.readdirSync(path.join(ROOT, 'src')).concat(fs.readdirSync(path.join(ROOT, 'src', 'ui')).map(x => 'ui/' + x)).filter(x => /\.(js|html)$/.test(x)).map(x => path.join(ROOT, 'src', x)).concat(['install.ps1', 'run.bat', 'run.sh', 'scripts/install-unix.sh'].map(x => path.join(ROOT, x))))
+    const user = []; for (const f of fs.readdirSync(path.join(ROOT, 'src')).concat(fs.readdirSync(path.join(ROOT, 'src', 'ui')).map(x => 'ui/' + x)).filter(x => /\.(js|html)$/.test(x)).map(x => path.join(ROOT, 'src', x)).concat(['install.ps1', 'run.bat', 'run.sh', 'scripts/install-unix.sh'].map(x => path.join(ROOT, x)).filter(f => fs.existsSync(f))))
       fs.readFileSync(f, 'utf8').split('\n').forEach((l, i) => { if (/^\s*(\/\/|\*|#|REM)/.test(l) || /CreateShortcut|#!\/bin\/bash/.test(l)) return; for (const s of l.match(/(['"`])(?:(?!\1).)*\1/g) || []) if (/node bin\/kit|ruleaza: |\.\/run\.sh |run\.bat [a-z]|run\.command [a-z]|schedule --remove|login-carrefour --relay/i.test(s)) user.push(path.basename(f) + ':' + (i + 1)); });
     assert(!user.length, 'mesaje cu comenzi: ' + user.join(', ')); return 'ok'; });
   await T('X8', 'Raport suport: UN fisier RAPORT-SUPORT-*.zip, REZUMAT.txt primul, poze login-diag, profil cenzurat, NICIUN secret', () => {
