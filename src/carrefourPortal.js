@@ -126,6 +126,28 @@ async function ocrCaptcha(page, { maxImages = 25, log = () => {} } = {}) {
   return null;
 }
 
+
+/** Classify the portal's login error text. 'captcha' = the code was wrong (retry with a new image),
+ *  'auth' = user/password rejected, 'locked' = account locked, 'unknown' = anything else (a person decides; never 'wrong password'). */
+function classifyLoginError(err) {
+  const t = String(err || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!t) return 'unknown';
+  if (/captcha|text verification|verificare|cod(ul)? (de )?(verificare|securitate|captcha)|text to identify|caracterele|characters/.test(t)) return 'captcha';
+  if (/lock|blocat|dezactivat|inactive|disabled|suspend/.test(t)) return 'locked';
+  if (/authentication failed|autentificare (a )?esuat|password|parola|user ?name|screen name|utilizator|credential|incorect|invalid (login|user|credentials)/.test(t)) return 'auth';
+  return 'unknown';
+}
+/** On every rejected login: screenshot + HTML of the page (password field emptied first) into out/<profile>/login-diag/. */
+async function saveLoginEvidence(s, profile, attempt, err, kind) {
+  const dir = path.join(profile.dirs.out, 'login-diag'); fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  await s.page.evaluate(() => document.querySelectorAll('input[type=password]').forEach(e => { e.value = ''; e.setAttribute('value', ''); })).catch(() => {});
+  await s.page.screenshot({ path: path.join(dir, `login-respins-${stamp}-${attempt}.png`), fullPage: true }).catch(() => {});
+  const html = (await s.page.content().catch(() => '')).replace(/(type="password"[^>]*value=")[^"]*"/gi, '$1"');
+  fs.writeFileSync(path.join(dir, `login-respins-${stamp}-${attempt}.html`), html);
+  fs.writeFileSync(path.join(dir, `login-respins-${stamp}-${attempt}.json`), JSON.stringify({ at: new Date().toISOString(), attempt, kind, portalMessage: err, url: s.page.url().split('?')[0] }, null, 2));
+}
+
 /**
  * Non-interactive login. 1) saved session; 2) user+password (+ simple image CAPTCHA read by local OCR, no AI).
  * Max 3 submits; wrong password => AUTH at once (no retries, no lock-out). Any CAPTCHA it cannot read
@@ -155,10 +177,15 @@ async function ensureLogin(s, profile, { log = () => {}, ocr = true } = {}) {
     const after = await pageState(s.page); const err = after.err || '';
     st = after.state === 'in' ? after : await nav(s);
     if (st.state === 'in') { s.guard.loginPhase = false; await s.save(); return code ? 'ocr' : 'parola'; }
-    log(`Login respins (${attempt}/3)`);
+    const kind = classifyLoginError(err);
+    log(`Login respins (${attempt}/3)${err ? ': portalul spune "' + err.slice(0, 160) + '"' : ' (fara mesaj)'} -> ${kind}`);
+    await saveLoginEvidence(s, profile, attempt, err, kind).catch(() => {});
     if (st.state === 'challenge') throw new CaptchaRequired('widget');
     if (!err) throw new CaptchaRequired('fara-mesaj'); // unclear answer: a person decides (no blind re-submits)
-    if (!/captcha|cod|verific|text/i.test(err)) throw kitError('AUTH', 'Portalul Carrefour nu a acceptat utilizatorul sau parola. Nu am reincercat, ca sa nu se blocheze contul. Verifica-le, apoi optiunea 6 (Configurare).');
+    if (kind === 'auth') throw kitError('AUTH', `Portalul Carrefour nu a acceptat utilizatorul sau parola (portalul spune: "${err.slice(0, 120)}"). Nu am reincercat, ca sa nu se blocheze contul. Verifica-le, apoi optiunea 6 (Configurare).`);
+    if (kind === 'locked') throw kitError('AUTH', `Contul Carrefour pare blocat (portalul spune: "${err.slice(0, 120)}"). Nu am reincercat. Contacteaza suportul portalului Carrefour.`);
+    if (kind === 'unknown') { const e = new CaptchaRequired('mesaj-necunoscut'); e.message += ` (portalul spune: "${err.slice(0, 120)}")`; throw e; } // never call an unknown message "wrong password"
+    // kind === 'captcha': OCR misread -> a new image, next attempt
   }
   throw new CaptchaRequired('3-incercari');
 }
@@ -433,4 +460,4 @@ async function fetchOrder(profile, orderNo) {
   } finally { await s.browser.close().catch(() => {}); }
 }
 
-module.exports = { pageState, PAGE_STATE, nav, headedLogin, loginForRun, goAuthed, checkSupplier, canAskHuman, normOrder, gridQuery, gridRows, ensureLogin, ocrCaptcha, _open: open, _ensureLogin: ensureLogin, _listOrders: listOrders, _EXTRACT: EXTRACT_JSON_MODEL, captchaRelay, detectCaptcha, discoverCarrefour, interactiveLogin, fetchOrder, CaptchaRequired, DOCS_URL };
+module.exports = { classifyLoginError, pageState, PAGE_STATE, nav, headedLogin, loginForRun, goAuthed, checkSupplier, canAskHuman, normOrder, gridQuery, gridRows, ensureLogin, ocrCaptcha, _open: open, _ensureLogin: ensureLogin, _listOrders: listOrders, _EXTRACT: EXTRACT_JSON_MODEL, captchaRelay, detectCaptcha, discoverCarrefour, interactiveLogin, fetchOrder, CaptchaRequired, DOCS_URL };

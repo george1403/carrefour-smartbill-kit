@@ -26,6 +26,7 @@ var jsonModel = ${JSON.stringify({ data: (st.orders || [{ id: 11, nrComMeti: '17
       if (u.pathname === '/captcha.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(png); }
       if (req.method === 'POST' && u.pathname.includes('/login')) {
         let b = ''; req.on('data', c => b += c); req.on('end', () => { st.submits++; const f = new URLSearchParams(b);
+          if (st.rejectMsg) return send(200, loginPage(st.rejectMsg)); // tests: portal answers with an arbitrary message
           if (f.get('p') !== st.password) return send(200, loginPage('Autentificare esuata. Va rugam sa incercati din nou.'));
           if (st.mode === 'image' && f.get('c') !== st.answer) { if (st.manual) st.wrongDone = true; return send(200, loginPage('Textul introdus nu corespunde cu codul de verificare.')); }
           if (st.mode === 'recaptcha' && !f.get('hc')) return send(200, loginPage('Confirmati ca nu sunteti robot.'));
