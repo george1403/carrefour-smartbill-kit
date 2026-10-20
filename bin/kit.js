@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 'use strict';
+// Bundled Chromium lives in <kit>/.runtime/browsers (install.* puts it there). Run straight from a shell
+// (node bin/kit.js ...) the env var is missing and Playwright looks in ~/Library/Caches -> exit 9. Set it here.
+{ const _p = require('path'), _fs = require('fs'); const _b = _p.join(__dirname, '..', '.runtime', 'browsers');
+  if (!process.env.PLAYWRIGHT_BROWSERS_PATH && _fs.existsSync(_b)) process.env.PLAYWRIGHT_BROWSERS_PATH = _b; }
 const { loadProfile } = require('../src/config');
 const args = process.argv.slice(2);
 const cmd = args[0];
