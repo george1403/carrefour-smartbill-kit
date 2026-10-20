@@ -23,6 +23,11 @@ command -v curl >/dev/null || fail "Lipseste programul curl."
 # macOS: remove the "downloaded from internet" flag from the kit folder, so run.command opens with a plain double-click
 [ "$PLAT" = darwin ] && xattr -dr com.apple.quarantine "$KIT_DIR" 2>/dev/null || true
 say "== Instalare Carrefour -> SmartBill ($PLAT-$ARCH) in: $KIT_DIR"
+# common traps, checked before downloading anything
+( : > "$KIT_DIR/.scriere-test-$$" ) 2>/dev/null && rm -f "$KIT_DIR/.scriere-test-$$" || fail "Nu pot scrie in folderul programului ($KIT_DIR). Mutati folderul in Documente si porniti din nou install.command."
+FREE_KB="$(df -Pk "$KIT_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
+if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 1000000 ] 2>/dev/null; then fail "Pe disc mai sunt doar $((FREE_KB/1024)) MB liberi; programul are nevoie de aproximativ 1 GB. Eliberati spatiu, apoi porniti din nou install.command."; fi
+case "$KIT_DIR" in *"/Library/Mobile Documents/"*|*"/Library/CloudStorage/"*) say "ATENTIE: folderul programului este intr-un folder sincronizat (iCloud/OneDrive/Google Drive). Sincronizarea poate bloca sau dubla jurnalele facturilor. Recomandat: mutati folderul in folderul personal (Acasa) si porniti din nou install.command." ;; esac
 USE_SYSTEM=0
 if [ "${KIT_FORCE_PORTABLE_NODE:-0}" != 1 ] && command -v node >/dev/null 2>&1; then
   MAJ="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
@@ -63,13 +68,19 @@ say "== Instalare reusita."
 # "Carrefour SmartBill - Meniu text" opens the old numbered menu (fallback)
 UI_APP=""
 if [ "$PLAT" = darwin ] && [ -d "$HOME/Desktop" ] && [ "${KIT_NO_SHORTCUT:-0}" != 1 ]; then
-  mkdir -p "$RT"; rm -rf "$HOME/Desktop/Carrefour SmartBill.app"
+  mkdir -p "$RT"
+  # another kit folder (another producer / an older kit) already owns "Carrefour SmartBill" -> ours gets "(folder name)"; never overwrite it
+  UIN="$(node src/shortcuts.js free-name "$HOME/Desktop" "Carrefour SmartBill" .app 2>/dev/null || echo 'Carrefour SmartBill')"
+  MNN="$(node src/shortcuts.js free-name "$HOME/Desktop" "Carrefour SmartBill - Meniu text" .command 2>/dev/null || echo 'Carrefour SmartBill - Meniu text')"
+  [ -n "$UIN" ] || UIN="Carrefour SmartBill"; [ -n "$MNN" ] || MNN="Carrefour SmartBill - Meniu text"
+  rm -rf "$HOME/Desktop/$UIN.app"
   ESC_DIR="$(printf '%s' "$KIT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  if osacompile -o "$HOME/Desktop/Carrefour SmartBill.app" -e "do shell script \"cd \" & quoted form of \"$ESC_DIR\" & \" && KIT_NO_PAUSE=1 /bin/bash ./run.sh ui > .runtime/ui.log 2>&1 &\"" >/dev/null 2>&1; then
-    rm -f "$HOME/Desktop/Carrefour SmartBill.command"; UI_APP="$HOME/Desktop/Carrefour SmartBill.app"
-  else SC="$HOME/Desktop/Carrefour SmartBill.command"; printf '#!/bin/bash\nexec "%s/run.command" ui\n' "$KIT_DIR" > "$SC" && chmod +x "$SC"; fi
-  SM="$HOME/Desktop/Carrefour SmartBill - Meniu text.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SM" && chmod +x "$SM"
-  say "Am pus pe Desktop scurtaturile: Carrefour SmartBill (programul) si Carrefour SmartBill - Meniu text (rezerva)"
+  # the app starts scripts/mac-ui-launch.sh: if the program cannot start (Node.js missing, broken install) it shows a dialog in Romanian
+  if osacompile -o "$HOME/Desktop/$UIN.app" -e "do shell script \"cd \" & quoted form of \"$ESC_DIR\" & \" && /bin/bash scripts/mac-ui-launch.sh > /dev/null 2>&1 &\"" >/dev/null 2>&1; then
+    rm -f "$HOME/Desktop/$UIN.command"; UI_APP="$HOME/Desktop/$UIN.app"
+  else SC="$HOME/Desktop/$UIN.command"; printf '#!/bin/bash\nexec "%s/run.command" ui\n' "$KIT_DIR" > "$SC" && chmod +x "$SC"; fi
+  SM="$HOME/Desktop/$MNN.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SM" && chmod +x "$SM"
+  say "Am pus pe Desktop scurtaturile: $UIN (programul) si $MNN (rezerva)"
 fi
 if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.command), apoi apasa Configurare."; exit 0; fi
 if [ "${KIT_NO_SETUP:-0}" != 1 ] && [ -n "$UI_APP" ]; then say "Se deschide programul in browser: apasa Configurare."; open "$UI_APP"; exit 0; fi

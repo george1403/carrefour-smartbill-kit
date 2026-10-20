@@ -50,6 +50,20 @@ function collect(root) {
   for (const f of fs.existsSync(root) ? fs.readdirSync(root) : []) if (/^ATENTIE.*\.txt$/.test(f)) files.push({ p: path.join(root, f), r: f });
   return files;
 }
+/** Hundreds of orders = thousands of files: the report must stay small enough for WhatsApp/email (default 20 MB of files).
+ *  Always: ledgers + state + last summaries + ATENTIE files. Then the newest logs/results of the last 30 days; at most 15 pictures. */
+function pick(files, { budget = Number(process.env.KIT_SUPPORT_MAX_MB || 20) * 1e6, days = 30, maxPng = 15, now = Date.now() } = {}) {
+  const st = f => { try { return fs.statSync(f.p); } catch { return null; } };
+  const must = f => /(^|[\\/])(issued|drafts|auto-state|auto-ultimul-rezumat|bulk-ciorne-ultimul-raport)\.json$|ultima-eroare\.txt$|meniu-istoric\.log$|^ATENTIE/i.test(f.r);
+  const withSt = files.map(f => ({ ...f, s: st(f) })).filter(f => f.s);
+  const keep = withSt.filter(must); let used = keep.reduce((t, f) => t + f.s.size, 0); let png = 0, skipped = 0;
+  for (const f of withSt.filter(f => !must(f)).sort((a, b) => b.s.mtimeMs - a.s.mtimeMs)) {
+    const isPng = /\.png$/i.test(f.r);
+    if (now - f.s.mtimeMs > days * 864e5 || used + f.s.size > budget || (isPng && png >= maxPng)) { skipped++; continue; }
+    keep.push(f); used += f.s.size; if (isPng) png++;
+  }
+  return { files: keep, skipped, bytes: used };
+}
 const git = root => { try { return require('child_process').execFileSync('git', ['-C', root, 'log', '-1', '--format=%h %ci'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { try { return fs.readFileSync(path.join(root, '.kit-commit'), 'utf8').trim(); } catch { return 'necunoscut'; } } };
 const tail = (f, n) => { try { return fs.readFileSync(f, 'utf8').split('\n').slice(-n).join('\n'); } catch { return ''; } };
 /** Status counts of the local ledgers (no amounts / clients). */
@@ -83,11 +97,11 @@ function info(root) {
 }
 /** Builds the support ZIP. Returns { file, count, text }. */
 function run({ root = ROOT, dest = null } = {}) {
-  const vals = secretValues(root); const files = collect(root);
+  const vals = secretValues(root); const sel = pick(collect(root)); const files = sel.files;
   const last = tail(path.join(root, 'logs', 'ultima-eroare.txt'), 40) || '(nicio eroare inregistrata)';
   const rez = [info(root), '', '== Ultimele optiuni alese din meniu ==', tail(path.join(root, 'logs', 'meniu-istoric.log'), 15) || '(niciuna)', '',
     '== Ultima eroare (cu caseta CE FACI) ==', last, '', '== Registre (stare) ==', ledgers(root), '', '== Verificare instalare (selftest) ==', selftestSummary(root), '',
-    '== Continut ==', 'logs/ = jurnale, out/ = rapoarte + poze login-diag, profil/ = setari FARA parole. Parolele, emailurile si sesiunile au fost inlocuite cu ***.'].join('\n');
+    '== Continut ==', 'logs/ = jurnale, out/ = rapoarte + poze login-diag, profil/ = setari FARA parole. Parolele, emailurile si sesiunile au fost inlocuite cu ***.', sel.skipped ? `(${sel.skipped} fisiere mai vechi de 30 de zile sau peste limita de marime nu au fost incluse.)` : ''].join('\n');
   const entries = [{ name: 'REZUMAT.txt', data: Buffer.from(redact(rez, vals)) }];
   for (const f of files) { try { entries.push({ name: f.r, data: /\.png$/i.test(f.r) ? fs.readFileSync(f.p) : Buffer.from(redact(fs.readFileSync(f.p, 'utf8'), vals)) }); } catch {} }
   entries.push(...profiles(root, vals));
@@ -110,4 +124,4 @@ function repair({ root = ROOT, log = console.log } = {}) {
   if (r.status === 0) { log(c.ok('GATA: browserul este instalat.') + ' Poti folosi din nou programul.'); return { ok: true }; }
   log(c.err('Descarcarea nu a reusit.') + ' Verifica internetul si alege din nou 14. Daca tot nu merge, alege 13 (Trimite raport la suport).'); return { ok: false };
 }
-module.exports = { ledgers, profiles, run, repair, zip, redact, secretValues, collect };
+module.exports = { ledgers, profiles, run, repair, zip, redact, secretValues, collect, pick };

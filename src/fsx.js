@@ -34,4 +34,13 @@ const readLedger = f => { let txt; try { txt = fs.readFileSync(f, 'utf8'); } cat
   throw Object.assign(new Error(`Jurnalul ${f} este deteriorat (nu se poate citi). M-am oprit ca sa nu fac dubluri. Trimite fisierul persoanei de contact tehnic; nu il sterge.`), { code: 'NEEDS_HUMAN' }); };
 const af = (f, data, opt) => { ensureDir(path.dirname(f)); fs.appendFileSync(f, data, opt); };
 const mv = (a, b) => { ensureDir(path.dirname(b)); fs.renameSync(a, b); };
-module.exports = { wf, af, mv, ensureDir, readLedger, rm };
+/** Saved browser sessions belong to ONE account. A sidecar "<state>.cont" holds a hash of the account (email/user):
+ *  a session saved for another account (another producer's kit on the same computer, or changed credentials) is
+ *  discarded instead of being reused. Sessions from older kits (no sidecar) are kept and stamped (update path). */
+const ownerHash = who => require('crypto').createHash('sha256').update(String(who || '').trim().toLowerCase()).digest('hex').slice(0, 24);
+function sessionOwnerOk(stateFile, who) {
+  if (!fs.existsSync(stateFile)) return true; let cur = null; try { cur = fs.readFileSync(stateFile + '.cont', 'utf8').trim(); } catch {}
+  if (cur === null || !who || cur === ownerHash(who)) return true;
+  try { fs.unlinkSync(stateFile); } catch {} return false; }
+const stampSessionOwner = (stateFile, who) => { if (who) wf(stateFile + '.cont', ownerHash(who)); };
+module.exports = { wf, af, mv, ensureDir, readLedger, rm, sessionOwnerOk, stampSessionOwner, ownerHash };

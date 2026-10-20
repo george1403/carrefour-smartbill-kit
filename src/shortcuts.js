@@ -23,11 +23,22 @@ function pointsHere(p, root = ROOT) {
     for (const t of txt) for (const w of want) if ((process.platform === 'win32' ? t.toLowerCase().includes(w.toLowerCase()) : t.includes(w))) return true; }
   return false;
 }
+const OURS = /^Carrefour SmartBill( - Meniu text)?( \([^()]*\))?\.(lnk|command|app)$/;
+/** Name for a NEW shortcut on desktop dir: the plain name, unless it already belongs to ANOTHER kit folder (another producer /
+ *  an older kit) -> "Carrefour SmartBill (<folder name>)" so the other kit's shortcut is never overwritten. */
+function freeName(dir, base, ext, root = ROOT) {
+  const plain = path.join(dir, base + ext); if (!fs.existsSync(plain) || pointsHere(plain, root)) return base;
+  const tag = path.basename(path.resolve(root)).replace(/[\\/:*?"<>|()]/g, ' ').trim().slice(0, 40) || 'kit';
+  const named = `${base} (${tag})`; const p2 = path.join(dir, named + ext); if (!fs.existsSync(p2) || pointsHere(p2, root)) return named;
+  return `${base} (${tag} ${require('crypto').createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 6)})`;
+}
 /** Removes this kit's shortcuts. Returns { removed: [names], kept: [names of shortcuts of ANOTHER kit folder] }. */
 function removeMine(root = ROOT) {
   const removed = [], kept = [];
-  for (const d of desktops()) for (const n of NAMES) { const f = path.join(d, n); if (!fs.existsSync(f)) continue;
+  for (const d of desktops()) for (const n of fs.readdirSync(d).filter(x => OURS.test(x))) { const f = path.join(d, n); if (!fs.existsSync(f)) continue;
     if (pointsHere(f, root)) { try { require('./fsx').rm(f); removed.push(n); } catch {} } else kept.push(n); }
   return { removed, kept };
 }
-module.exports = { NAMES, desktops, pointsHere, removeMine };
+module.exports = { NAMES, desktops, pointsHere, removeMine, freeName };
+// installers: node src/shortcuts.js free-name <desktop> <base> <ext>
+if (require.main === module && process.argv[2] === 'free-name') process.stdout.write(freeName(process.argv[3], process.argv[4], process.argv[5]));

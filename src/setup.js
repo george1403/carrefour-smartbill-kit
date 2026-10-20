@@ -92,6 +92,8 @@ async function run({ dryRun = false } = {}) {
   const MOCK = process.env.KIT_SETUP_MOCK ? JSON.parse(fs.readFileSync(process.env.KIT_SETUP_MOCK, 'utf8')) : null; // tests only: no network
 
   let profile = bareProfile('_setup', envFile);
+  // the temporary setup session is shared by every kit on this computer: never reuse it (it may be another producer's account)
+  for (const f of ['storage-state.json', 'storage-state.json.cont', 'carrefour-storage-state.json', 'carrefour-storage-state.json.cont']) { try { fs.unlinkSync(path.join(profile.dirs.state, f)); } catch {} }
   console.log('Citesc contul SmartBill (doar citire)...');
   const sb = MOCK ? MOCK.smartbill : await discoverSmartbill(profile, { log: () => {} });
   const name = slug(sb.company?.name || sb.companyName);
@@ -124,6 +126,8 @@ async function run({ dryRun = false } = {}) {
   // move the session/out dirs under the real profile name
   const real = bareProfile(name, envFile);
   for (const k of ['state', 'out']) if (fs.existsSync(profile.dirs[k]) && !fs.existsSync(real.dirs[k])) mv(profile.dirs[k], real.dirs[k]);
+  // re-setup: the fresh SmartBill session (just logged in with the answers above) replaces the old one; nothing left behind in _setup
+  for (const f of ['storage-state.json', 'storage-state.json.cont']) { const a = path.join(profile.dirs.state, f); if (fs.existsSync(a)) { try { fs.mkdirSync(real.dirs.state, { recursive: true, mode: 0o700 }); fs.copyFileSync(a, path.join(real.dirs.state, f)); fs.unlinkSync(a); } catch {} } }
   profile = real;
 
   console.log('\nCitesc portalul Carrefour (doar citire)...');

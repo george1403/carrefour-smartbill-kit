@@ -16,8 +16,9 @@ function start(opts = {}) {
     return `<html><head><title>Welcome - Liferay</title><script>Liferay={ThemeDisplay:{isSignedIn:()=>false}}</script></head><body>${err ? `<div class="alert-error">${err}</div>` : ''}
 <form id="_58_fm" method="post" action="/c/portal/login?p_p_id=58"><input id="_58_login" name="u"><input id="_58_password" name="p" type="password"><input type="hidden" id="hc" name="hc" value="">${cap}<button type="submit">Autentificare</button></form>${human}</body></html>`;
   };
+  const allOrders = () => (st.orders || [{ id: 11, nrComMeti: '1780308', magazin: 'CARREFOUR BRASOV', codGLN: '5940475006037', dataCom: '19.10.2026', totalFaraTvaML: 120.36, stare: 'Noua' }]).map(o => ({ furnizor: st.supplierName, codFurnizor: st.supplier, ...o }));
   const docsPage = () => `<html><head><title>Documente</title><script>Liferay={ThemeDisplay:{isSignedIn:()=>true}};EC={Url:{goTo:(u,p,o,t)=>window.open('/detail?id='+o.id)}};
-var jsonModel = ${JSON.stringify({ data: (st.orders || [{ id: 11, nrComMeti: '1780308', magazin: 'CARREFOUR BRASOV', codGLN: '5940475006037', dataCom: '19.10.2026', totalFaraTvaML: 120.36, stare: 'Noua' }]).map(o => ({ furnizor: st.supplierName, codFurnizor: st.supplier, ...o })) })};</script></head><body><a href="/c/portal/logout">Iesire</a></body></html>`;
+var jsonModel = ${JSON.stringify(st.model || (() => { const all = allOrders(); return st.pageSize ? { data: all.slice(0, st.pageSize), totalRecords: all.length } : { data: all }; })())};</script></head><body><a href="/c/portal/logout">Iesire</a></body></html>`;
   const detail = () => `<html><head><script>Liferay={ThemeDisplay:{isSignedIn:()=>true}};var jsonModel = ${JSON.stringify({ data: { linii: [{ codEAN: '5940000000017', codArticol: 90000001, articol: 'PRODUS TEST 50G', cant: 6, um: 'PCE', pret: 20.06, cotaTva: 11 }] } })};</script></head><body>detaliu</body></html>`;
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x'); const send = (code, body, h = {}) => { res.writeHead(code, { 'content-type': 'text/html', ...h }); res.end(body); };
@@ -27,11 +28,17 @@ var jsonModel = ${JSON.stringify({ data: (st.orders || [{ id: 11, nrComMeti: '17
       if (req.method === 'POST' && u.pathname.includes('/login')) {
         let b = ''; req.on('data', c => b += c); req.on('end', () => { st.submits++; const f = new URLSearchParams(b);
           if (st.rejectMsg) return send(200, loginPage(st.rejectMsg)); // tests: portal answers with an arbitrary message
-          if (f.get('p') !== st.password) return send(200, loginPage('Autentificare esuata. Va rugam sa incercati din nou.'));
+          if (f.get('p') !== (st.passwordFn ? st.passwordFn() : st.password)) return send(200, loginPage('Autentificare esuata. Va rugam sa incercati din nou.'));
           if (st.mode === 'image' && f.get('c') !== st.answer) { if (st.manual) st.wrongDone = true; return send(200, loginPage('Textul introdus nu corespunde cu codul de verificare.')); }
           if (st.mode === 'recaptcha' && !f.get('hc')) return send(200, loginPage('Confirmati ca nu sunteti robot.'));
           const id = 'S' + Math.random().toString(36).slice(2); st.sessions.add(id); st.docsHits = 0;
           send(302, '', { location: '/docs', 'set-cookie': `sess=${id}; Path=/` }); });
+        return;
+      }
+      if (req.method === 'POST' && /GRID_DOCUMENTE_FURNIZOR/.test(u.search)) { // read-only grid query (pagination)
+        let b = ''; req.on('data', c => b += c); req.on('end', () => { st.gridCalls = (st.gridCalls || 0) + 1; if (!authed(req)) return send(200, loginPage());
+          const q = JSON.parse(b || '{}'); const rows = st.gridBroken ? [] : allOrders().slice(q.startRow || 0, q.endRow || 100);
+          res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ data: rows })); });
         return;
       }
       if (st.mode === 'challenge') return send(200, '<html><head><title>Just a moment...</title></head><body><div id="challenge-stage"></div></body></html>');

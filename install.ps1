@@ -20,6 +20,11 @@ function Dl($url, $out) { for ($i = 1; $i -le 3; $i++) { try { Invoke-WebRequest
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
 Write-Host "== Instalare Carrefour -> SmartBill (win-$arch) in: $Kit"
+# common traps, checked before downloading anything (plain Romanian, nothing changed yet)
+if ($Kit -match '\\AppData\\Local\\Temp\\' -and $Kit -match '(\.zip|Temp\d+_)') { Fail "Ati pornit install.bat direct din ZIP, fara sa-l dezarhivati. Inchideti fereastra, click dreapta pe ZIP > Extrage tot > Extragere, apoi dublu-click pe install.bat din folderul extras." }
+try { $probe = Join-Path $Kit ('.scriere-test-' + $PID); [IO.File]::WriteAllText($probe, 'ok'); Remove-Item -LiteralPath $probe -Force } catch { Fail "Nu pot scrie in folderul programului ($Kit). Mutati folderul in Documente (sau pe Desktop) si porniti din nou install.bat." }
+try { $free = (Get-PSDrive -Name ($Kit.Substring(0,1))).Free; if ($free -and $free -lt 1GB) { Fail ("Pe disc mai sunt doar {0:N0} MB liberi; programul are nevoie de aproximativ 1 GB. Eliberati spatiu, apoi porniti din nou install.bat." -f ($free / 1MB)) } } catch {}
+foreach ($od in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) { if ($od -and $Kit.ToLower().StartsWith($od.ToLower())) { Write-Host "ATENTIE: folderul programului este in OneDrive ($od). OneDrive poate bloca sau dubla fisierele programului (jurnalele facturilor). Recomandat: mutati folderul in C:\Users\$env:USERNAME\ (in afara OneDrive) si porniti din nou install.bat." -ForegroundColor Yellow; break } }
 
 $useSystem = $false
 if ($env:KIT_FORCE_PORTABLE_NODE -ne '1') {
@@ -60,9 +65,12 @@ try { Get-ChildItem -LiteralPath $Kit -Recurse -File -ErrorAction SilentlyContin
 # "Carrefour SmartBill - Meniu text" opens the old numbered menu (fallback)
 $uiLnk = $null
 if ($env:KIT_NO_SHORTCUT -ne '1') { try { $desk = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell
-  $lnk = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill.lnk')); $lnk.TargetPath = (Join-Path $Kit 'run.bat'); $lnk.Arguments = 'ui'; $lnk.WorkingDirectory = $Kit; $lnk.WindowStyle = 7; $lnk.Save(); $uiLnk = $lnk.FullName
-  $m = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill - Meniu text.lnk')); $m.TargetPath = (Join-Path $Kit 'run.bat'); $m.WorkingDirectory = $Kit; $m.Save()
-  Write-Host 'Am pus pe Desktop scurtaturile: Carrefour SmartBill (programul) si Carrefour SmartBill - Meniu text (rezerva)' } catch {} }
+  # another kit folder (another producer / an older kit) already owns the plain name -> ours gets "(folder name)"; never overwritten
+  $uiName = (& $node (Join-Path $Kit 'src\shortcuts.js') free-name $desk 'Carrefour SmartBill' '.lnk'); if (-not $uiName) { $uiName = 'Carrefour SmartBill' }
+  $mnName = (& $node (Join-Path $Kit 'src\shortcuts.js') free-name $desk 'Carrefour SmartBill - Meniu text' '.lnk'); if (-not $mnName) { $mnName = 'Carrefour SmartBill - Meniu text' }
+  $lnk = $ws.CreateShortcut((Join-Path $desk ($uiName + '.lnk'))); $lnk.TargetPath = (Join-Path $Kit 'run.bat'); $lnk.Arguments = 'ui'; $lnk.WorkingDirectory = $Kit; $lnk.WindowStyle = 7; $lnk.Save(); $uiLnk = $lnk.FullName
+  $m = $ws.CreateShortcut((Join-Path $desk ($mnName + '.lnk'))); $m.TargetPath = (Join-Path $Kit 'run.bat'); $m.WorkingDirectory = $Kit; $m.Save()
+  Write-Host "Am pus pe Desktop scurtaturile: $uiName (programul) si $mnName (rezerva)" } catch {} }
 if ((Test-Path (Join-Path $Kit '.env')) -and $env:KIT_FORCE_SETUP -ne '1') { Write-Host 'Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.bat), apoi apasa Configurare.'; exit 0 }
 if ($env:KIT_NO_SETUP -ne '1' -and $uiLnk) { Write-Host 'Se deschide programul in browser: apasa Configurare.'; Start-Process -FilePath $uiLnk; exit 0 }
 if ($env:KIT_NO_SETUP -ne '1') { & $node (Join-Path $Kit 'bin\kit.js') setup }

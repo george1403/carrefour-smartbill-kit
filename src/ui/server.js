@@ -18,7 +18,7 @@ const DIGITS = s => String(s || '').replace(/\D/g, '').slice(0, 12);
 // Actions = the same commands as menu.js ITEMS (same numbers in history)
 const ACTIONS = {
   orders: { k: '1', title: 'Comenzile Carrefour', args: () => ['orders'] },
-  ciorna: { k: '2', title: 'Ciornă pentru comanda', args: a => ['ciorna', a.order], need: 'order' },
+  ciorna: { k: '2', title: 'Ciornă pentru comanda', args: a => ['ciorna', a.order], need: 'order', lock: true },
   preview: { k: '3', title: 'Previzualizare comanda', args: a => ['preview', a.order], need: 'order' },
   auto: { k: '4', title: 'Verificare acum (comenzile noi)', args: () => ['auto'], lock: true },
   login: { k: '5', title: 'Autentificare Carrefour', args: () => ['login-carrefour'] },
@@ -49,7 +49,7 @@ function create({ demo = null, idleMs = 30 * 60e3, log = () => {} } = {}) {
 
   function engineBusy() { // the shared lock of auto / bulk-ciorne (a scheduled run may hold it)
     const o = outDir(); if (!o || !fs.existsSync(path.join(o, 'auto.lock'))) return false;
-    const { lock } = require('../auto'); const un = lock(o); if (!un) return true; un(); return false;
+    return require('../auto').lockHeld(o); // read-only: never creates/deletes the lock (a scheduled run starting now is not disturbed)
   }
 
   function status() {
@@ -60,11 +60,12 @@ function create({ demo = null, idleMs = 30 * 60e3, log = () => {} } = {}) {
     for (const f of fs.readdirSync(ROOT)) if (/^ATENTIE.*\.txt$/i.test(f)) { const t = tail(path.join(ROOT, f), 3).join(' '); problems.push({ kind: /autentific/i.test(f) ? 'login' : 'other', text: t.replace(/^\[[^\]]*\]\s*/, '').slice(0, 400), file: f }); }
     if (o) {
       const st = readJ(path.join(o, 'auto-state.json'), {}); for (const [nr, v] of Object.entries(st)) if (v && v.needsHuman) problems.push({ kind: 'order', text: `Comanda ${nr} are nevoie de verificarea ta: ${String(v.reason || v.last || '').slice(0, 200)}` });
-      for (const L of ['issued.json', 'drafts.json']) for (const [nr, v] of Object.entries(readJ(path.join(o, L), {}))) if (v && /pending|unknown|finalizing/.test(v.status || '')) problems.push({ kind: 'order', text: `Comanda ${nr}: salvare neclara (${v.status}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` });
+      for (const L of ['issued.json', 'drafts.json']) for (const [nr, v] of Object.entries(readJ(path.join(o, L), {}))) if (v && /pending|unknown|finalizing|stopped|unverified|unchecked/.test(v.status || '')) problems.push({ kind: 'order', text: `Comanda ${nr}: salvare neclara (${v.status}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` });
     }
     if (process.platform === 'win32') { try { if (fs.existsSync(path.join(ROOT, 'run.bat') + ':Zone.Identifier')) problems.push({ kind: 'other', text: require('../errors').BLOCKED_MSG }); } catch {} }
     if (!fs.existsSync(path.join(ROOT, '.env')) || !prof) problems.unshift({ kind: 'setup', text: profErr || 'Programul nu este configurat inca.' });
     let sched = false; try { sched = !!require('../schedule').current(); } catch {}
+    if (sched && o) { try { const t = require('../schedule').staleNotice(o); if (t) problems.push({ kind: 'other', text: t }); } catch {} }
     const h = tail(path.join(ROOT, 'logs', 'meniu-istoric.log'), 1)[0] || null;
     return { demo: !!demo, configured: !!prof && !(prof.missing || []).length, profile: name, company: cfg.company && cfg.company.name || null, series: cfg.smartbill && cfg.smartbill.series || null,
       mode: cfg.auto && cfg.auto.mode || null, armed: !!(o && fs.existsSync(path.join(o, 'automat-armat.json'))), maxPerRun: cfg.auto && cfg.auto.maxPerRun || null,

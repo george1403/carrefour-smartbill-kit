@@ -97,6 +97,7 @@ async function openSession({ profile, headless = true, log = console.log }) {
   const { chromium } = require('playwright');
   fs.mkdirSync(profile.dirs.state, { recursive: true, mode: 0o700 });
   const stateFile = path.join(profile.dirs.state, 'storage-state.json');
+  require('./fsx').sessionOwnerOk(stateFile, profile.secrets && profile.secrets.email); // another account's session is never reused
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({
     ...(fs.existsSync(stateFile) ? { storageState: stateFile } : {}),
@@ -125,7 +126,7 @@ async function openSession({ profile, headless = true, log = console.log }) {
   guard.loginPhase = false; // from now on every non-GET is blocked unless writesAllowed
   await selectCompany(page, profile.cfg.company);
   await context.storageState({ path: stateFile });
-  fs.chmodSync(stateFile, 0o600);
+  fs.chmodSync(stateFile, 0o600); require('./fsx').stampSessionOwner(stateFile, profile.secrets && profile.secrets.email);
   return { browser, context, page, guard, stateFile };
 }
 

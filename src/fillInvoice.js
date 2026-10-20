@@ -75,18 +75,36 @@ async function dismissNotices(page) {
 // (all pages). A Carrefour invoice whose mentions carry this order number blocks the run: issued -> duplicate,
 // cancelled -> a human decides (never re-issued automatically), draft -> finish/delete the draft first.
 /** Read the SmartBill invoice report (read-only, all pages) from fromIso to today -> Carrefour rows (text). */
+const retryWait = (t, ra) => { const base = Number(process.env.KIT_RETRY_MS || 20000); const sec = Number(ra); return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, 120000) : base * (t + 1) * 2; };
 async function readInvoiceReport(page, profile, cf, fromIso) {
   const from = dmy(fromIso); const to = dmy(todayIso());
-  const respP = page.waitForResponse(r => /\/raport\/facturi\/ajax\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST', { timeout: 45000 }).catch(() => null);
-  await page.goto(`${BASE}/raport/facturi/?startDate=${from.d}%2F${from.m}%2F${from.y}&endDate=${to.d}%2F${to.m}%2F${to.y}`, { waitUntil: 'domcontentloaded' });
-  const resp = await respP;
-  if (!resp || !resp.ok()) throw new Error('STOP: nu pot citi raportul de facturi din SmartBill (verificare anti-dublura).');
+  // SmartBill busy (429 = too many requests, 5xx) or slow: wait and retry (max 3 tries); still failing -> RATE/NETWORK error
+  // (nothing saved yet: auto/bulk stop the run WITHOUT counting it against the order, and retry at the next check)
+  let resp = null;
+  for (let t = 0; t < 3; t++) {
+    const respP = page.waitForResponse(r => /\/raport\/facturi\/ajax\/?$/.test(new URL(r.url()).pathname) && r.request().method() === 'POST', { timeout: 45000 }).catch(() => null);
+    try { await page.goto(`${BASE}/raport/facturi/?startDate=${from.d}%2F${from.m}%2F${from.y}&endDate=${to.d}%2F${to.m}%2F${to.y}`, { waitUntil: 'domcontentloaded' }); }
+    catch (e) { if (t === 2) throw Object.assign(new Error('SmartBill nu raspunde (raportul de facturi nu s-a deschis). Nu am salvat nimic.'), { code: 'NETWORK' }); await page.waitForTimeout(retryWait(t)); continue; }
+    resp = await respP; if (resp && resp.ok()) break;
+    if (resp && !(resp.status() === 429 || resp.status() >= 500)) break; // 4xx other than 429: not transient
+    if (t < 2) await page.waitForTimeout(retryWait(t, resp && resp.headers()['retry-after']));
+  }
+  if (!resp) throw Object.assign(new Error('SmartBill nu a raspuns la timp (raportul de facturi, verificare anti-dublura). Nu am salvat nimic.'), { code: 'NETWORK' });
+  if (resp.status() === 429) throw Object.assign(new Error('SmartBill cere sa incetinim (prea multe cereri, HTTP 429). Nu am salvat nimic.'), { code: 'RATE' });
+  if (resp.status() >= 500) throw Object.assign(new Error(`SmartBill are o problema temporara (HTTP ${resp.status()}). Nu am salvat nimic.`), { code: 'NETWORK' });
+  if (!resp.ok()) throw new Error('STOP: nu pot citi raportul de facturi din SmartBill (verificare anti-dublura).');
   let j; try { j = await resp.json(); } catch { throw new Error('STOP: raportul de facturi nu e JSON (verificare anti-dublura).'); }
   const body = resp.request().postData() || ''; let raw = j.aaData || [];
   const total = Number(j.iTotalDisplayRecords || j.iTotalRecords || raw.length);
   for (let startAt = raw.length; startAt < total && startAt < 20000; startAt += 500) {
     const b = body.replace(/iDisplayStart=\d+/, `iDisplayStart=${startAt}`).replace(/iDisplayLength=\d+/, 'iDisplayLength=500');
-    const more = await page.evaluate(bb => new Promise(res => window.$.ajax({ url: '/raport/facturi/ajax/', type: 'POST', data: bb, dataType: 'json', cache: false }).done(d => res(d.aaData || [])).fail(() => res(null))), b);
+    let more = null, st = 0;
+    for (let t = 0; t < 3 && !more; t++) {
+      const r = await page.evaluate(bb => new Promise(res => window.$.ajax({ url: '/raport/facturi/ajax/', type: 'POST', data: bb, dataType: 'json', cache: false, timeout: 60000 }).done(d => res({ rows: d.aaData || [] })).fail(x => res({ status: x.status }))), b);
+      if (r.rows) more = r.rows; else { st = r.status; if (!(st === 429 || st >= 500 || st === 0) || t === 2) break; await page.waitForTimeout(retryWait(t)); }
+    }
+    if (!more && (st === 429)) throw Object.assign(new Error('SmartBill cere sa incetinim (prea multe cereri, HTTP 429) la citirea raportului. Nu am salvat nimic.'), { code: 'RATE' });
+    if (!more && (st >= 500 || st === 0)) throw Object.assign(new Error('SmartBill nu raspunde la citirea raportului de facturi. Nu am salvat nimic.'), { code: 'NETWORK' });
     if (!more) throw new Error('STOP: raportul de facturi nu s-a putut citi complet (verificare anti-dublura).');
     raw = raw.concat(more); if (!more.length) break;
   }
@@ -115,7 +133,9 @@ async function alreadyIssued(page, profile, order, cf) {
   for (const f of ['issued.json', 'drafts.json']) {
     const file = path.join(profile.dirs.out, f); const L = require('./fsx').readLedger(file);
     const nzk = k => String(k).replace(/^0+/, ''); const k = Object.keys(L).find(x => nzk(x) === nzk(order.orderNo)); const e = k && L[k];
-    if (e && (e.status === 'pending' || e.status === 'unknown')) return { kind: 'unclear', text: `Comanda ${order.orderNo}: o salvare anterioara in SmartBill s-a intrerupt sau e neclara (${f}, stare ${e.status}). Verifica in SmartBill (Facturi si Ciorne) daca exista deja factura/ciorna; nu continui automat.` };
+    // issued.json: ONLY "issued" means a final invoice. Any other state (draft-saved, draft-stopped, finalizing, finalize-unknown,
+    // issued-unverified ...) = a run stopped half-way -> a person checks; never reported as "already invoiced".
+    if (e && (e.status === 'pending' || e.status === 'unknown' || (f === 'issued.json' && e.status !== 'issued'))) return { kind: 'unclear', text: `Comanda ${order.orderNo}: o salvare anterioara in SmartBill s-a intrerupt sau e neclara (${f}, stare ${e.status}). Verifica in SmartBill (Facturi si Ciorne) daca exista deja factura/ciorna; nu continui automat.` };
     if (e && e.status !== 'pending' && e.status !== 'unknown') return f === 'issued.json'
       ? { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata: factura ${e.number || 'id ' + e.invoiceId}. Nu o mai completez.` }
       : { kind: 'draft', draftId: e.invoiceId ? String(e.invoiceId) : null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` };
@@ -380,9 +400,9 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   const { readLedger } = require('./fsx'); const nzk = k => String(k).replace(/^0+/, '');
   const L = readLedger(ledgerFile); const prevKey = Object.keys(L).find(k => nzk(k) === nzk(order.orderNo));
   if (prevKey) throw kerr('NEEDS_HUMAN', `STOP: comanda ${order.orderNo} figureaza deja in jurnalul ${path.basename(ledgerFile)} (stare ${L[prevKey].status}): o salvare anterioara s-a intrerupt sau e neclara. Verifica in SmartBill (Facturi si Ciorne); nu reincerc automat.`);
-  L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; wf(ledgerFile, JSON.stringify(L, null, 2));
-  // merge-save: re-read the file and replace ONLY this order, so a parallel run (e.g. menu 2 while 'auto' runs) never loses entries
+  // merge-save: re-read the file and replace ONLY this order, so a parallel run never loses entries
   const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
+  L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; save();
   const before = page.url();
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
@@ -426,7 +446,10 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
       throw kerr('NEEDS_HUMAN', `STOP: nu am putut verifica XML-ul ciornei ${rec.invoiceId} (${pv.xml ? 'erori e-Factura: ' + JSON.stringify(pv.xmlErrors).slice(0, 200) : rec.draftXml}). Ciorna ramane nefinalizata in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.`);
     }
     // race: another run / a person may have issued this order meanwhile -> re-read the report just before the final save
-    const again = classify(await D.readReport(page, profile, JSON.parse(fs.readFileSync(path.join(profile.root, 'data', 'carrefour.json'), 'utf8')), order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30)), order.orderNo, profile.cfg.smartbill?.series, null);
+    let againRows; try { againRows = await D.readReport(page, profile, JSON.parse(fs.readFileSync(path.join(profile.root, 'data', 'carrefour.json'), 'utf8')), order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30)); }
+    catch (e) { rec.status = 'draft-stopped'; rec.needsHuman = true; rec.recheckError = e.message.split('\n')[0]; L[order.orderNo] = rec; save();
+      throw kerr('NEEDS_HUMAN', `STOP: ciorna ${rec.invoiceId} pentru comanda ${order.orderNo} e salvata, dar verificarea finala anti-dublura nu s-a putut face (${rec.recheckError}). Ciorna NU a fost finalizata; verific-o si emite-o tu din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.`, { invoiceId: rec.invoiceId }); }
+    const again = classify(againRows || await D.readReport(page, profile, JSON.parse(fs.readFileSync(path.join(profile.root, 'data', 'carrefour.json'), 'utf8')), order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30)), order.orderNo, profile.cfg.smartbill?.series, null);
     if (again && again.kind !== 'draft') { rec.status = 'draft-stopped'; rec.needsHuman = true; L[order.orderNo] = rec; save(); throw kerr('DUPLICATE', `STOP: intre timp a aparut in SmartBill o factura ${again.kind} pentru comanda ${order.orderNo} (${again.number || ''}); ciorna ${rec.invoiceId} NU a fost finalizata.`, { kind: again.kind }); }
     if (process.env.KIT_STOP_BEFORE_FINAL === '1') { rec.status = 'draft-stopped'; rec.stoppedBeforeFinal = true; L[order.orderNo] = rec; save(); throw kerr('STOP_BEFORE_FINAL', `Test: oprit inainte de "Salveaza" (ciorna ${rec.invoiceId}, XML verificat).`); }
     rec.status = 'finalizing'; L[order.orderNo] = rec; save();
@@ -524,4 +547,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };

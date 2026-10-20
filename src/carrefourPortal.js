@@ -32,6 +32,7 @@ async function open(profile, { headless = true } = {}) {
   const { chromium } = require('playwright');
   const stateFile = path.join(profile.dirs.state, 'carrefour-storage-state.json');
   fs.mkdirSync(profile.dirs.state, { recursive: true, mode: 0o700 });
+  const who = profile.secrets && profile.secrets.carrefourUser; require('./fsx').sessionOwnerOk(stateFile, who);
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext({ ...(fs.existsSync(stateFile) ? { storageState: stateFile } : {}), viewport: { width: 1600, height: 1000 }, locale: 'ro-RO' });
   const guard = { loginPhase: true, blocked: [] };
@@ -50,7 +51,7 @@ async function open(profile, { headless = true } = {}) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(45000);
-  const save = async () => { await context.storageState({ path: stateFile }); fs.chmodSync(stateFile, 0o600); };
+  const save = async () => { await context.storageState({ path: stateFile }); fs.chmodSync(stateFile, 0o600); require('./fsx').stampSessionOwner(stateFile, who); };
   return { browser, context, page, guard, save, stateFile, profile };
 }
 
@@ -368,7 +369,21 @@ async function captchaRelay(profile, { dir, timeoutMs = 10 * 60 * 1000 } = {}) {
 async function listOrders(s) {
   await goAuthed(s, DOCS_URL); await delay(1000);
   const m = await s.page.evaluate(EXTRACT_JSON_MODEL);
-  const rows = (m && (Array.isArray(m.data) ? m.data : m.records)) || [];
+  // layout change detection: no data model, or rows without order numbers -> STOP (never "0 orders" by mistake)
+  if (!m || !(Array.isArray(m.data) || Array.isArray(m.records))) throw kitError('LAYOUT', 'Pagina cu comenzile Carrefour nu mai are lista in forma cunoscuta (portalul s-a schimbat). Nu am facut nimic.');
+  let rows = Array.isArray(m.data) ? m.data : m.records;
+  if (rows.length && !rows.some(r => r && (r.nrComMeti || r.nrCom))) throw kitError('LAYOUT', 'Lista de comenzi Carrefour nu mai are numarul comenzii in forma cunoscuta (portalul s-a schimbat). Nu am facut nimic.');
+  // pagination: the page embeds only the first page; when the model says there are more, read the rest (read-only grid POST)
+  const total = Number(m.totalRecords ?? m.total ?? m.recordsTotal ?? m.lastRow ?? m.rowCount ?? m.count ?? NaN);
+  if (Number.isFinite(total) && total > rows.length) {
+    const seen = new Set(rows.map(r => String(r.nrComMeti || r.nrCom || r.id))); const PAGE = 500;
+    for (let start = rows.length; start < Math.min(total, 20000); start += PAGE) {
+      const more = gridRows(await gridQuery(s, { filterModel: m.filterModel || {}, sortModel: m.sortModel || [], startRow: start, endRow: start + PAGE, action: 'refresh' }));
+      for (const r of more) { const k = String(r.nrComMeti || r.nrCom || r.id); if (!seen.has(k)) { seen.add(k); rows.push(r); } }
+      if (!more.length) break;
+    }
+    if (rows.length < total) throw kitError('LAYOUT', `Portalul Carrefour spune ca are ${total} comenzi, dar am putut citi doar ${rows.length}. M-am oprit ca sa nu sar comenzi.`);
+  }
   const tpl = await s.page.evaluate(() => {
     if (!window.EC?.Url?.goTo) return null; let c = null; const o = window.open;
     window.open = u => { c = String(u); return { focus() {} }; };

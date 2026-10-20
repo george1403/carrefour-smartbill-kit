@@ -14,24 +14,38 @@ const iso = d => { const m = String(d || '').match(/^(\d{2})\.(\d{2})\.(\d{4})/)
 const readJ = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return d; } };
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-/** One run at a time. A lock left by a killed run (Mac asleep / laptop closed / power cut) is ignored when its process is gone or after 2 h. */
-// Atomic (O_EXCL create) so two runs started at the same second cannot both get it; a heartbeat refreshes the
-// lock every minute, so a long bulk run (hours) is never treated as stale by the hourly 'auto'.
+const os = require('os'); const HOST = (() => { try { return os.hostname(); } catch { return '?'; } })();
+/** One run at a time (auto, bulk-ciorne, a single draft/invoice, the UI jobs).
+ * Lock file = "pid\nhost\ntoken", created atomically (O_EXCL); a heartbeat refreshes its mtime every minute.
+ * - same computer, process gone (crash, power cut) -> taken over at once;
+ * - same computer, process alive -> busy; after 2 h without heartbeat the pid is assumed reused and the lock is taken over;
+ *   the old holder (e.g. a laptop that slept for hours) notices with held() before its next order and stops;
+ * - lock written by ANOTHER computer (folder synced by OneDrive/iCloud) -> busy for 2 h after its last heartbeat. */
 const LOCK_STALE_MS = 2 * 3600e3; const LOCK_BEAT_MS = 60e3;
+function readLock(f) { let st, txt; try { st = fs.statSync(f); txt = fs.readFileSync(f, 'utf8'); } catch { return null; }
+  const [pid, host, token] = txt.split('\n'); return { pid: Number(pid) || 0, host: host || HOST, token: token || '', age: Date.now() - st.mtimeMs }; }
+/** Read-only: is the lock held by a live run right now? (the UI polls this; it never creates or deletes the lock) */
+function lockHeld(dir) { const l = readLock(path.join(dir, 'auto.lock')); if (!l) return false;
+  if (l.pid === process.pid && l.host === HOST) return false;
+  if (l.host !== HOST) return l.age < LOCK_STALE_MS;
+  if (!l.pid) return l.age < 60e3;
+  return l.age < LOCK_STALE_MS && alive(l.pid); }
 function lock(dir) {
   const f = path.join(dir, 'auto.lock'); fs.mkdirSync(dir, { recursive: true });
-  for (let i = 0; i < 2; i++) {
-    try { const fd = fs.openSync(f, 'wx'); fs.writeSync(fd, String(process.pid)); fs.closeSync(fd); break; }
+  const token = Math.random().toString(36).slice(2) + Date.now().toString(36); let got = false;
+  for (let i = 0; i < 3 && !got; i++) {
+    try { const fd = fs.openSync(f, 'wx'); fs.writeSync(fd, `${process.pid}\n${HOST}\n${token}`); fs.closeSync(fd); got = true; }
     catch (e) { if (e.code !== 'EEXIST') throw e;
-      let st, pid; try { st = fs.statSync(f); pid = Number(fs.readFileSync(f, 'utf8')); } catch { continue; }
-      const fresh = Date.now() - st.mtimeMs < LOCK_STALE_MS;
-      if (pid === process.pid) break;
-      if (fresh && pid && alive(pid)) return null;
-      if (fresh && !pid && Date.now() - st.mtimeMs < 60e3) return null; // being written right now
-      try { fs.unlinkSync(f); } catch {} if (i === 1) return null; }
+      const l = readLock(f); if (!l) continue; // vanished meanwhile: try again
+      if (lockHeld(dir)) return null;
+      if (l.pid === process.pid && l.host === HOST) return null; // this process already holds it (nested call)
+      try { fs.unlinkSync(f); } catch {} }
   }
-  const beat = setInterval(() => { try { const t = new Date(); fs.utimesSync(f, t, t); } catch {} }, LOCK_BEAT_MS); beat.unref();
-  return () => { clearInterval(beat); try { if (Number(fs.readFileSync(f, 'utf8')) === process.pid) fs.unlinkSync(f); } catch {} };
+  if (!got) return null;
+  const mine = () => { const l = readLock(f); return !!l && l.token === token; };
+  const beat = setInterval(() => { try { if (mine()) { const t = new Date(); fs.utimesSync(f, t, t); } } catch {} }, LOCK_BEAT_MS); beat.unref();
+  const release = () => { clearInterval(beat); try { if (mine()) fs.unlinkSync(f); } catch {} };
+  release.held = mine; return release;
 }
 
 /** Clear Romanian notice when the Carrefour session expired during an automatic check: file + desktop notification (max once per 6 h). */
@@ -85,6 +99,24 @@ function plan(orders, { cfg, ledgers, state, today = localDay() }) {
   });
 }
 
+/** auto-state.json (per-order failure counters + "needs a person" flags). Damaged -> kept aside as .deteriorat-<time> and a warning;
+ *  never silently forgotten (the ledgers + SmartBill report still block duplicates). */
+function readState(f, L = () => {}) { let t; try { t = fs.readFileSync(f, 'utf8'); } catch { return {}; }
+  try { const j = JSON.parse(t.replace(/^\uFEFF/, '') || '{}'); if (j && typeof j === 'object' && !Array.isArray(j)) return j; } catch {}
+  const b = `${f}.deteriorat-${Date.now()}`; try { fs.renameSync(f, b); } catch {}
+  L(`ATENTIE: fisierul ${path.basename(f)} era deteriorat; l-am pus deoparte (${path.basename(b)}). Comenzile marcate "necesita verificare" se verifica din nou in SmartBill inainte de orice salvare.`); return {}; }
+/** Logs and screenshots must not grow forever (hundreds of orders x screenshots). Removed: logs/*.log older than 180 days,
+ *  *.png/*.html diagnostics in out/<profil>/fill, login-diag, recon older than 60 days. NEVER: ledgers, invoice PDF/XML, .json results. */
+function pruneOld(root, out, now = Date.now()) {
+  const marker = path.join(out, '.curatare.json'); try { if (now - JSON.parse(fs.readFileSync(marker, 'utf8')).at < 86400e3) return 0; } catch {}
+  let n = 0; const old = (f, days) => { try { return now - fs.statSync(f).mtimeMs > days * 86400e3; } catch { return false; } };
+  const walk = (d, fn, depth = 0) => { let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; } for (const e of es) { const p = path.join(d, e.name); if (e.isDirectory() && depth < 3) walk(p, fn, depth + 1); else if (e.isFile()) fn(p); } };
+  walk(path.join(root, 'logs'), f => { if (/\.log$/i.test(f) && old(f, 180)) { try { fs.unlinkSync(f); n++; } catch {} } });
+  for (const sub of ['fill', 'login-diag', 'recon']) walk(path.join(out, sub), f => { if (/\.(png|html)$/i.test(f) && old(f, 60)) { try { fs.unlinkSync(f); n++; } catch {} } });
+  for (const p of ['meniu-istoric.log', 'ui.log'].map(f => path.join(root, 'logs', f)).concat(['auto-launchd.log', 'auto-cron.log'].map(f => path.join(root, 'out', f)))) { try { if (fs.statSync(p).size > 5e6) { const t = fs.readFileSync(p, 'utf8'); fs.writeFileSync(p, t.slice(-2e6)); n++; } } catch {} }
+  wf(marker, JSON.stringify({ at: now, removed: n })); return n;
+}
+
 async function runOnce(profile, { log = console.log, mode: forced, check = false } = {}) {
   let issuedNow = [];
   const cfg = profile.cfg; const out = profile.dirs.out; const logs = path.join(out, '..', 'logs');
@@ -93,10 +125,11 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
   // automat, first run in this folder = dry-run only (lists what WOULD be issued); real issuing starts from the next run
   const armFile = path.join(out, 'automat-armat.json');
   if (mode === 'automat' && !check && !fs.existsSync(armFile)) { check = true; var firstDry = true; }
-  const logFile = path.join(logs, `auto-${new Date().toISOString().slice(0, 10)}.log`);
+  const logFile = path.join(logs, `auto-${localDay()}.log`);
   const L = m => { const line = `[${new Date().toLocaleString('ro-RO')}] ${m}`; log(line); af(logFile, line + '\n'); };
-  const unlock = lock(out); if (!unlock) { L('Alta verificare ruleaza deja; ies.'); return { busy: true }; }
-  const stateFile = path.join(out, 'auto-state.json'); const state = readJ(stateFile, {});
+  const unlock = lock(out); if (!unlock) { L('Alta operatiune a programului ruleaza deja (verificare automata, ciorne in bloc sau o ciorna); nu pornesc a doua oara. Reincerc la urmatoarea verificare.'); return { busy: true, exit: 13 }; }
+  const stateFile = path.join(out, 'auto-state.json'); const state = readState(stateFile, L);
+  try { pruneOld(profile.root || path.join(out, '..', '..'), out); } catch {}
   const summary = { at: new Date().toISOString(), mode: check ? 'verificare' : mode, done: [], skipped: [], errors: [] };
   try {
     if (firstDry) L('Prima rulare in mod AUTOMAT: doar verificare (nu emit nimic). Facturile se emit de la urmatoarea rulare.');
@@ -112,6 +145,7 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
     summary.skipped = p.filter(x => x.skip).map(x => ({ orderNo: x.orderNo, why: x.skip }));
     L(`${orders.length} comenzi in portal; ${todo.length} noi de procesat.`);
     for (const o of todo) {
+      if (!check && unlock.held && !unlock.held()) { summary.stopped = 'lacatul a fost preluat de alta rulare'; L('Calculatorul a stat (somn) prea mult si alta rulare a preluat lucrul; ma opresc aici ca sa nu lucram doi deodata. Ce e facut ramane.'); break; }
       if (check) { summary.done.push({ orderNo: o.orderNo, would: mode === 'automat' ? 'factura' : 'ciorna' }); L(`  ${o.orderNo} (${o.date}, ${o.store}) -> ar fi ${mode === 'automat' ? 'facturata' : 'ciorna'}`); continue; }
       try {
         const r = await require('./fillInvoice').run(profile, { orderNo: o.orderNo, issue: mode === 'automat', draftOnly: mode !== 'automat', log: () => {} });
@@ -121,7 +155,10 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
         delete state[nz(o.orderNo)];
       } catch (e) {
         if (e.code === 'CAPTCHA' || e.code === 'WRONG_ACCOUNT') { if (e.code === 'CAPTCHA') { notifyLogin(out, L); summary.loginNeeded = true; } summary.exit = require('./errors').classify(e).exit; summary.errors.push({ orderNo: o.orderNo, error: e.message.split('\n')[0] }); break; }
-        const msg = e.message.split('\n')[0]; const st = state[nz(o.orderNo)] = state[nz(o.orderNo)] || { fails: 0 };
+        const msg = e.message.split('\n')[0];
+        // SmartBill busy / rate limit / no internet BEFORE anything was saved: not the order's fault -> no failure counted, stop, retry next hour
+        if (e.code === 'NETWORK' || e.code === 'RATE') { summary.exit = 5; summary.errors.push({ orderNo: o.orderNo, error: msg, transient: true }); L(`  ${o.orderNo}: ${msg}`); L(e.code === 'RATE' ? 'SmartBill cere sa incetinim (prea multe cereri); ma opresc si reiau la urmatoarea verificare. Nu s-a salvat nimic pentru aceasta comanda.' : 'Internetul sau SmartBill nu raspunde; ma opresc si reiau la urmatoarea verificare. Nu s-a salvat nimic pentru aceasta comanda.'); break; }
+        const st = state[nz(o.orderNo)] = state[nz(o.orderNo)] || { fails: 0 };
         if (e.code === 'DUPLICATE') { st.needsHuman = e.kind === 'cancelled'; st.reason = msg; summary.skipped.push({ orderNo: o.orderNo, why: msg }); L(`  ${o.orderNo}: sarita - ${msg}`); }
         else { st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG' || e.code === 'SAVE_UNKNOWN' || st.fails >= 3) { st.needsHuman = true; st.reason = st.fails >= 3 ? `3 incercari esuate: ${msg}` : msg; } summary.errors.push({ orderNo: o.orderNo, error: msg }); L(`  ${o.orderNo}: EROARE - ${msg}${st.needsHuman ? ' (nu mai incerc automat)' : ''}`); }
         // automat: any doubt (unknown save result, XML check, needs a person) stops the WHOLE run, not only this order
@@ -158,4 +195,4 @@ async function watch(profile, { every = 60, maxRuns = Infinity, ...o } = {}) {
   }
   return { exit: 0 };
 }
-module.exports = { maxPerRun, desktopNotice, runOnce, watch, plan, lock, notifyLogin };
+module.exports = { maxPerRun, desktopNotice, runOnce, watch, plan, lock, lockHeld, localDay, notifyLogin, pruneOld, readState };

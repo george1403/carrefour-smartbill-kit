@@ -38,7 +38,7 @@ const HELP = `Comenzi:
 Optiuni: --profile=NUME
 Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefour necesara (optiunea 5), 4 parola gresita,
   5 fara internet/portal cazut, 6 portalul s-a schimbat, 7 autentificare neterminata, 8 disc plin/fara drept de scriere,
-  9 instalare incompleta, 10 configurare deteriorata, 11 necesita verificarea ta, 12 cont Carrefour al altui furnizor`;
+  9 instalare incompleta, 10 configurare deteriorata, 11 necesita verificarea ta, 12 cont Carrefour al altui furnizor, 13 programul lucreaza deja (alta rulare in curs), 14 folder nepotrivit pe Mac (mutati-l in Acasa)`;
 
 (async () => {
   if (!cmd || cmd === 'help') return console.log(HELP);
@@ -77,7 +77,8 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   }
   if (cmd === 'auto') { const a = require('../src/auto'); const o = { check: flag('check'), mode: flag('draft-only') ? 'ciorne' : undefined };
     if (flag('watch')) { const r = await a.watch(profile, { ...o, every: Number(opt('every') || 60) }); process.exitCode = r.exit || 0; return; }
-    const r = await a.runOnce(profile, o); process.exitCode = r.exit != null ? r.exit : (r.errors?.length ? 1 : 0); return; }
+    const r = await a.runOnce(profile, o); if (r.busy && !process.env.KIT_IN_MENU) console.error('CE FACI: ' + require('../src/errors').HELP[13]);
+    process.exitCode = r.exit != null ? r.exit : (r.errors?.length ? 1 : 0); return; }
   if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10) });
     if (process.env.KIT_BULK_SUMMARY) require('fs').writeFileSync(process.env.KIT_BULK_SUMMARY, JSON.stringify({ todo: (r.preview || []).length, exit: r.exit || 0 }));
     process.exitCode = r.exit || 0; return; }
@@ -85,8 +86,11 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'orders') return void await require('../src/orders').list(profile);
   if (cmd === 'fill' || cmd === 'ciorna' || cmd === 'preview') {
     const nr = args[1] && !args[1].startsWith('--') ? args[1] : null; const draftOnly = cmd === 'ciorna' || flag('draft-only');
-    const r = await require('../src/fillInvoice').run(profile, { orderNo: nr, orderFile: opt('order-file'),
-      issue: flag('issue'), draftOnly, probeSave: flag('probe-save'), headed: flag('headed'), log: m => console.log(m) });
+    // a draft/invoice for ONE order takes the same lock as auto / bulk-ciorne: never two SmartBill saves at once
+    const saves = draftOnly || flag('issue'); const unlock = saves ? require('../src/auto').lock(profile.dirs.out) : () => {};
+    if (!unlock) throw require('../src/errors').kitError('BUSY', 'Programul lucreaza deja (verificare automata sau ciorne in bloc). Nu am facut ciorna acum, ca sa nu lucram doi deodata.');
+    let r; try { r = await require('../src/fillInvoice').run(profile, { orderNo: nr, orderFile: opt('order-file'),
+      issue: flag('issue'), draftOnly, probeSave: flag('probe-save'), headed: flag('headed'), log: m => console.log(m) }); } finally { unlock(); }
     console.log('\n' + require('../src/report').fillSummary(r));
     if (flag('json')) console.log(JSON.stringify({ mode: r.mode, deliveryAddress: r.deliveryAddress, issued: r.issued, filledShot: r.filledShot }, null, 2));
     return;
@@ -98,7 +102,7 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'download') { const r = await require('../src/fillInvoice').finalizeFromLedger(profile, args[1], { downloadOnly: true }); console.log(JSON.stringify({ number: r.number, files: r.files }, null, 2)); return; }
   if (cmd === 'finalize') { const r = await require('../src/fillInvoice').finalizeFromLedger(profile, args[1]); console.log(JSON.stringify({ status: r.status, number: r.number, title: r.title, files: r.files }, null, 2)); return; }
   console.error('Comanda necunoscuta: ' + cmd + '\n\n' + HELP); process.exit(1);
-})().catch(e => {
+})().then(async () => { try { await require("../src/captchaOcr").terminate(); } catch {} }).catch(e => {
   const { classify, HELP } = require('../src/errors'); const c = classify(e);
   const col = require('../src/color').stderr;
   if (c.exit === 2) { console.error('\n' + col.warn('OPRIT: ') + c.message); process.exit(2); }

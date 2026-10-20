@@ -6,6 +6,10 @@
 
 **Totul se face cu dublu-click si cu butoane mari.** Programul se deschide **in browser** (Chrome, Edge sau Safari) si arata **la fel pe Windows si pe Mac**. Nu trebuie sa scrii nicio comanda.
 
+**Incepe cu videoclipul scurt:** in folderul *Tutorial* din arhiva, priveste intai **00_PREZENTARE_RAPIDA.mp4** (2 minute). Apoi ai videoclipul de instalare pentru calculatorul tau, videoclipul lung (toate explicatiile) si acest ghid.
+
+**Unde pui folderul programului:** pe **Mac** in folderul personal (**Acasă**, Finder → Mergi → Acasă), **nu** in Desktop, Documente sau Descărcări (de acolo macOS nu lasa verificarea automata sa porneasca singura). Pe **Windows** in Documente sau in *C:\Users\numele-tau*, nu in OneDrive.
+
 ## 1. Descarca si dezarhiveaza
 **Windows (important, altfel instalarea poate fi blocata fara niciun mesaj):**
 1. Descarca **carrefour-smartbill-kit-WINDOWS.zip**.
@@ -14,7 +18,10 @@
 
 **Mac:** descarca **carrefour-smartbill-kit-MAC.zip** si da dublu-click pe el.
 
-Muta folderul obtinut in **Documente**. Evita folderele sincronizate (OneDrive/iCloud) daca se poate.
+Unde pui folderul obtinut:
+- **Mac:** in folderul personal (**Acasă**: in Finder, meniul **Mergi → Acasă**). **NU** in Desktop, Documente sau Descărcări: de acolo macOS nu lasa verificarea automata sa porneasca singura (programul te anunta daca e asa).
+- **Windows:** in **Documente** (sau direct in *C:\Users\numele-tau*). Daca Documentele tale sunt in **OneDrive**, alege *C:\Users\numele-tau*: OneDrive poate bloca jurnalele facturilor (instalarea te avertizeaza).
+
 
 ## 2. Instaleaza (o singura data, 5–10 minute)
 **Windows:** dublu-click pe **install.bat**.
@@ -30,6 +37,8 @@ Programul isi descarca singur tot ce ii trebuie si scrie **Instalare reusita**. 
 - **Carrefour SmartBill - Meniu text** — vechiul meniu cu numere, doar ca rezerva.
 
 La prima instalare programul se deschide singur la **Configurare**.
+
+Instalarea verifica singura, inainte sa descarce ceva: daca ai pornit-o direct din ZIP (Windows), daca folderul permite scrierea si daca ai cel putin ~1 GB liber pe disc; iti spune in romana ce sa faci. Daca pe acelasi calculator exista deja programul in alt folder (de exemplu al altei firme), scurtatura noua primeste numele folderului in paranteza, ca sa nu o inlocuiasca pe cea veche.
 
 ## 3. Ecranul principal
 Dublu-click pe **Carrefour SmartBill** de pe Desktop. Se deschide o pagina in browser cu:
@@ -77,7 +86,7 @@ Arata daca verificarea la fiecare ora e **PORNITĂ** sau **OPRITĂ** si ce face 
 - *doar ciorne*: ciorne pentru comenzile noi (de dupa configurare, cel mult 14 zile vechime), fara dubluri;
 - *automat*: prima verificare doar arata ce ar face; apoi cel mult **3 facturi** la o verificare; la orice indoiala se opreste si lasa ciorna; facturile emise apar in **FACTURI-EMISE-AUTOMAT.txt**.
 
-Butoane: **Pornește** / **Oprește** si **Verifică acum, o dată**. Fiecare folder de program are propria verificare: oprirea sau pornirea intr-un folder nu o atinge pe a altui folder.
+Butoane: **Pornește** / **Oprește** si **Verifică acum, o dată**. Pe Windows verificarea merge si pe baterie si se reia singura dupa somn sau repornire. Daca programul lucreaza deja (de exemplu verificarea automata ruleaza chiar atunci), apasarea unui buton spune **„Programul lucreaza deja”**: asteapta cateva minute si incearca din nou. Daca verificarea nu a mai rulat de peste 3 ore, apare la **Probleme** cu pasii de urmat. Fiecare folder de program are propria verificare: oprirea sau pornirea intr-un folder nu o atinge pe a altui folder.
 
 ## 9. Istoric, Raport suport, Reparare — OPȚIONAL, doar la nevoie
 *Istoric: doar când vreți să vedeți ce a făcut programul. Raport suport: doar când apare caseta roșie **CE FACI** și pașii din ea nu rezolvă problema. Reparare: doar când programul spune că lipsește browserul sau o parte din instalare.*

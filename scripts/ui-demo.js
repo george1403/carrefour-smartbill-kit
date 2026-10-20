@@ -16,6 +16,8 @@ async function setup({ orders = ORDERS } = {}) {
   if (fs.existsSync(path.join(ROOT, '.env')) && !fs.existsSync(marker)) throw Object.assign(new Error('Modul demonstratie merge doar intr-un folder de test (acesta are conturi reale).'), { code: 'CONFIG' });
   fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(marker, 'folder demonstratie\n');
   const mock = await require('./mock-portal').start({ orders: JSON.parse(JSON.stringify(orders)) });
+  // the simulated portal accepts the Carrefour password currently saved in .env (like the real portal accepts the producer's real password)
+  mock.st.passwordFn = () => { try { return (fs.readFileSync(path.join(ROOT, '.env'), 'utf8').match(/^CARREFOUR_PORTAL_PASSWORD="?([^"\r\n]*)"?/m) || [])[1] || 'p'; } catch { return 'p'; } };
   if (process.env.KIT_DEMO_MOCK_MODE) mock.st.mode = process.env.KIT_DEMO_MOCK_MODE; // tests: 'down', 'recaptcha'...
   const setupMock = path.join(home, 'setup-mock.json');
   fs.writeFileSync(setupMock, JSON.stringify({

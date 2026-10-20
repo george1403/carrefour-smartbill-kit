@@ -60,12 +60,12 @@ async function askYes(q) {
  */
 async function run(profile, { check = false, confirm = null, batch = 10, log = console.log } = {}) {
   const out = profile.dirs.out; const logs = path.join(out, '..', 'logs'); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(logs, { recursive: true });
-  const logFile = path.join(logs, `bulk-ciorne-${new Date().toISOString().slice(0, 10)}.log`);
+  const logFile = path.join(logs, `bulk-ciorne-${require('./auto').localDay()}.log`);
   const L = m => { log(m); af(logFile, `[${new Date().toLocaleString('ro-RO')}] ${m}\n`); };
   batch = Math.max(1, Math.min(50, Number(batch) || 10));
   const rep = { at: new Date().toISOString(), mode: check ? 'previzualizare' : 'ciorne', profileMode: profile.cfg.auto?.mode || 'ciorne', created: [], alreadyDraft: [], skipped: [], errors: [], remaining: [] };
-  const unlock = lock(out); if (!unlock) { L('Alta rulare (auto / ciorne in bloc) e in curs; ies. Incearca din nou peste cateva minute.'); rep.busy = true; rep.exit = 1; return rep; }
-  const stateFile = path.join(out, 'auto-state.json'); const state = readJ(stateFile, {});
+  const unlock = lock(out); if (!unlock) { L('Alta rulare (auto / ciorne in bloc) e in curs; ies. Incearca din nou peste cateva minute.'); rep.busy = true; rep.exit = 13; return rep; }
+  const stateFile = path.join(out, 'auto-state.json'); const state = require('./auto').readState(stateFile, L);
   try {
     if (rep.profileMode === 'automat') L('Profilul e in mod AUTOMAT, dar "ciorne in bloc" face DOAR ciorne (nu emite nicio factura).');
     L('Citesc TOATE comenzile din portalul Carrefour (fara limita de data)...');
@@ -87,6 +87,7 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
       const lot = pv.todo.slice(b, b + batch); L(`Lot ${b / batch + 1}/${Math.ceil(pv.todo.length / batch)}: ${lot.map(x => x.orderNo).join(', ')}`);
       for (const o of lot) {
         if (stop) { rep.remaining.push(o.orderNo); continue; }
+        if (unlock.held && !unlock.held()) { stop = 'alta rulare a preluat lucrul (calculatorul a stat in somn mult timp)'; rep.exit = 13; rep.remaining.push(o.orderNo); L('Calculatorul a stat (somn) prea mult si alta rulare a preluat lucrul; ma opresc. Ce e facut ramane; reia optiunea mai tarziu.'); continue; }
         try {
           // ALWAYS draft-only: issue:false + draftOnly:true (never finalized, whatever the profile mode)
           const r = await fi.run(profile, { orderNo: o.orderNo, issue: false, draftOnly: true, log: () => {} });
@@ -99,6 +100,7 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
           if (e.code === 'DUPLICATE' && e.kind === 'draft') { const id = e.draftId || (msg.match(/\(id (\d+)/) || [])[1] || '?'; rep.alreadyDraft.push({ orderNo: o.orderNo, draftId: id, why: `are deja ciorna (id ${id})` }); L(`  ${o.orderNo}: are deja ciorna (id ${id}) - nu o dublez`); continue; }
           const st = state[nz(o.orderNo)] = state[nz(o.orderNo)] || { fails: 0 };
           if (e.code === 'DUPLICATE') { if (e.kind === 'cancelled') { st.needsHuman = true; st.reason = msg; } rep.skipped.push({ orderNo: o.orderNo, why: msg }); L(`  ${o.orderNo}: sarita - ${msg}`); continue; }
+          if (e.code === 'NETWORK' || e.code === 'RATE') { stop = e.code === 'RATE' ? 'SmartBill cere sa incetinim (prea multe cereri)' : 'fara internet / SmartBill nu raspunde'; rep.exit = 5; rep.errors.push({ orderNo: o.orderNo, error: msg, transient: true }); rep.remaining.push(o.orderNo); L(`  ${o.orderNo}: ${msg}`); L('Ma opresc. Pentru aceasta comanda nu s-a salvat nimic; reia optiunea mai tarziu (ce e facut nu se dubleaza).'); continue; }
           st.fails++; st.last = msg; if (e.code === 'NEEDS_HUMAN' || e.code === 'CONFIG' || e.code === 'SAVE_UNKNOWN') { st.needsHuman = true; st.reason = msg; }
           rep.errors.push({ orderNo: o.orderNo, error: msg }); L(`  ${o.orderNo}: EROARE - ${msg}`);
           if (/\b403\b|Forbidden/.test(msg)) { stop = 'SmartBill limiteaza temporar accesul (403)'; L('SmartBill limiteaza temporar accesul; ma opresc. Reia optiunea mai tarziu (ce e facut nu se dubleaza).'); }

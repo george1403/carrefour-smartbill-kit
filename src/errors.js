@@ -1,6 +1,6 @@
 'use strict';
 // Coduri de iesire si mesaje simple, in romana, pentru producatori (fara termeni tehnici).
-const EXIT = { OK: 0, ERROR: 1, DUPLICATE: 2, LOGIN_NEEDED: 3, AUTH: 4, NETWORK: 5, LAYOUT: 6, MANUAL_LOGIN: 7, DISK: 8, INSTALL: 9, CONFIG: 10, NEEDS_HUMAN: 11, WRONG_ACCOUNT: 12 };
+const EXIT = { OK: 0, ERROR: 1, DUPLICATE: 2, LOGIN_NEEDED: 3, AUTH: 4, NETWORK: 5, LAYOUT: 6, MANUAL_LOGIN: 7, DISK: 8, INSTALL: 9, CONFIG: 10, NEEDS_HUMAN: 11, WRONG_ACCOUNT: 12, BUSY: 13, FOLDER: 14 };
 const HELP = {
   1: 'A aparut o eroare. Citeste mesajul de mai sus; daca nu e clar, alege 13 (Raport suport) si trimite fisierul lui George.',
   2: 'Oprit ca sa nu faci o dubla: comanda are deja factura sau ciorna in SmartBill. Nu s-a salvat nimic.',
@@ -14,6 +14,8 @@ const HELP = {
   10: 'Configurarea e deteriorata sau incompleta. Alege optiunea 6 (Configurare) si refa-o.',
   12: 'Contul Carrefour din configurare NU este al firmei tale. Programul s-a oprit si nu a citit nimic. Alege optiunea 6 (Configurare) si scrie utilizatorul si parola portalului pentru firma ta.',
   11: 'Comanda are nevoie de verificarea ta (vezi mesajul de mai sus). Nu am salvat nimic.',
+  14: 'Folderul programului este intr-un loc pe care macOS nu il lasa folosit de verificarea automata. Mutati folderul programului in folderul personal (Finder: Mergi > Acasa) si porniti install.command din locul nou.',
+  13: 'Programul lucreaza deja (o verificare automata, ciorne in bloc sau o ciorna). Nu am pornit a doua oara. Incearca din nou peste cateva minute.',
 };
 // Pasi numerotati pentru caseta CE FACI (fiecare spune ce optiune din MENIU alegi; niciodata comenzi de scris).
 const STEPS = {
@@ -29,6 +31,8 @@ const STEPS = {
   10: ['Alege 6 (Configurare) si raspunde din nou la intrebari.'],
   11: ['Citeste mesajul de mai sus: comanda are nevoie de ochiul tau.', 'Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna comanda respectiva.', 'Nu am salvat nimic nou.'],
   12: ['Alege 6 (Configurare).', 'Scrie utilizatorul si parola portalului Carrefour pentru FIRMA TA.'],
+  14: ['In Finder: meniul Mergi > Acasa.', 'Trageti acolo tot folderul programului.', 'Dati dublu-click pe install.command din locul nou, apoi porniti din nou Verificarea automata.'],
+  13: ['Nu ai nimic de reparat: programul lucreaza deja la altceva.', 'Asteapta cateva minute si incearca din nou aceeasi optiune.'],
 };
 /** Caseta "CE FACI" cu pasi numerotati, in romana, cu numarul din meniu. */
 function ceFaci(exit, c = require('./color').stderr) {
@@ -46,6 +50,9 @@ function classify(e) {
   if (c === 'DUPLICATE') return { exit: EXIT.DUPLICATE, message: m };
   if (c === 'CAPTCHA' || c === 'LOGIN_NEEDED' || c === 'SESSION') return { exit: EXIT.LOGIN_NEEDED, message: m };
   if (c === 'AUTH') return { exit: EXIT.AUTH, message: m };
+  if (c === 'FOLDER') return { exit: EXIT.FOLDER, message: m };
+  if (c === 'BUSY') return { exit: EXIT.BUSY, message: m };
+  if (c === 'RATE') return { exit: EXIT.NETWORK, message: m };
   if (c === 'NETWORK') return { exit: EXIT.NETWORK, message: m };
   if (c === 'LAYOUT') return { exit: EXIT.LAYOUT, message: m };
   if (c === 'MANUAL_LOGIN') return { exit: EXIT.MANUAL_LOGIN, message: m };
