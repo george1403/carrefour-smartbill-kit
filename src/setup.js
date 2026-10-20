@@ -136,7 +136,7 @@ async function run({ dryRun = false } = {}) {
       cfData = await cf.discoverCarrefour(profile, { log: () => {} });
     } else {
       console.log(`  ATENTIE: portalul Carrefour nu a putut fi citit: ${e.message}`);
-      console.log('  Profilul se salveaza fara datele din portal. Dupa ce rezolvi (ex: node bin/kit.js login-carrefour), ruleaza: node bin/kit.js discover');
+      console.log('  Profilul se salveaza fara datele din portal. Dupa ce rezolvi, alege din meniu 5 (Autentificare Carrefour), apoi 12 (Reciteste datele din SmartBill si Carrefour).');
       cfData = { error: e.message, code: e.code || null, stores: [], products: [], supplierCodes: [] };
     }
   }

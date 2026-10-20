@@ -12,8 +12,8 @@ $NodeVersion = (Get-Content -LiteralPath (Join-Path $Kit '.node-version') -Raw).
 $Rt = Join-Path $Kit '.runtime'
 function Fail($m) {
   Write-Host ""; Write-Host "EROARE: $m" -ForegroundColor Red
-  Write-Host "Verifica legatura la internet. Daca firma foloseste proxy, seteaza variabila HTTPS_PROXY si ruleaza din nou install.bat."
-  Write-Host "Daca tot nu merge, fa o poza acestei ferestre si trimite-o persoanei de contact tehnic."
+  Write-Host "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.bat."
+  Write-Host "Daca tot nu merge, fa o poza acestei ferestre si trimite-o lui George (WhatsApp/email)."
   exit 1
 }
 function Dl($url, $out) { for ($i = 1; $i -le 3; $i++) { try { Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out; return } catch { if ($i -eq 3) { throw } Start-Sleep 3 } } }
@@ -54,6 +54,10 @@ Write-Host "Instalez browserul Chromium (o singura data, ~150 MB)..."
 & $npx --no-install playwright install chromium; if ($LASTEXITCODE -ne 0) { Fail "Nu pot descarca browserul Chromium." }
 & $node (Join-Path $Kit 'bin\kit.js') selftest; if ($LASTEXITCODE -ne 0) { Fail "Testul de verificare a esuat." }
 Write-Host "== Instalare reusita." -ForegroundColor Green
+# files from a downloaded ZIP carry the "from internet" mark (SmartScreen asks each time): remove it inside the kit folder only
+try { Get-ChildItem -LiteralPath $Kit -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notlike '*\node_modules\*' -and $_.FullName -notlike '*\.runtime\*' } | Unblock-File -ErrorAction SilentlyContinue } catch {}
+# shortcut on the Desktop: double-click opens the menu
+if ($env:KIT_NO_SHORTCUT -ne '1') { try { $desk = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill.lnk')); $lnk.TargetPath = (Join-Path $Kit 'run.bat'); $lnk.WorkingDirectory = $Kit; $lnk.Save(); Write-Host 'Am pus pe Desktop scurtatura: Carrefour SmartBill' } catch {} }
 if (-not (Test-Path (Join-Path $Kit '.env'))) { & $node (Join-Path $Kit 'bin\kit.js') import-config --auto }
-if ((Test-Path (Join-Path $Kit '.env')) -and $env:KIT_FORCE_SETUP -ne '1') { Write-Host 'Configurarea exista deja (.env). Pentru a o reface: run.bat setup'; exit 0 }
+if ((Test-Path (Join-Path $Kit '.env')) -and $env:KIT_FORCE_SETUP -ne '1') { Write-Host 'Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.bat), apoi alege 6 (Configurare).'; exit 0 }
 if ($env:KIT_NO_SETUP -ne '1') { & $node (Join-Path $Kit 'bin\kit.js') setup }

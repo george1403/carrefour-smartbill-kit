@@ -10,8 +10,8 @@ RT="$KIT_DIR/.runtime"
 say() { printf '%s\n' "$*"; }
 fail() {
   say ""; say "EROARE: $*"
-  say "Verifica legatura la internet. Daca firma foloseste proxy, seteaza HTTPS_PROXY (ex: export HTTPS_PROXY=http://proxy:8080) si ruleaza din nou."
-  say "Daca tot nu merge, fa o poza acestei ferestre si trimite-o persoanei de contact tehnic."
+  say "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.command."
+  say "Daca tot nu merge, fa o poza acestei ferestre si trimite-o lui George (WhatsApp/email)."
   exit 1
 }
 dl() { curl -fL --retry 3 --connect-timeout 20 -o "$2" "$1"; }
@@ -20,6 +20,8 @@ case "$(uname -s)" in Darwin) PLAT=darwin; EXT=tar.gz ;; Linux) PLAT=linux; EXT=
 case "$(uname -m)" in x86_64|amd64) ARCH=x64 ;; arm64|aarch64) ARCH=arm64 ;; *) fail "Procesor necunoscut: $(uname -m)" ;; esac
 command -v curl >/dev/null || fail "Lipseste programul curl."
 
+# macOS: remove the "downloaded from internet" flag from the kit folder, so run.command opens with a plain double-click
+[ "$PLAT" = darwin ] && xattr -dr com.apple.quarantine "$KIT_DIR" 2>/dev/null || true
 say "== Instalare Carrefour -> SmartBill ($PLAT-$ARCH) in: $KIT_DIR"
 USE_SYSTEM=0
 if [ "${KIT_FORCE_PORTABLE_NODE:-0}" != 1 ] && command -v node >/dev/null 2>&1; then
@@ -57,6 +59,10 @@ if [ "$PLAT" = linux ]; then
 fi
 node bin/kit.js selftest || fail "Testul de verificare a esuat."
 say "== Instalare reusita."
+# shortcut on the Desktop (Mac): double-click opens the menu
+if [ "$PLAT" = darwin ] && [ -d "$HOME/Desktop" ] && [ "${KIT_NO_SHORTCUT:-0}" != 1 ]; then
+  SC="$HOME/Desktop/Carrefour SmartBill.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SC" && chmod +x "$SC" && say "Am pus pe Desktop scurtatura: Carrefour SmartBill"
+fi
 [ -f "$KIT_DIR/.env" ] || node bin/kit.js import-config --auto || true
-if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja (.env). Pentru a o reface: ./run.sh setup"; exit 0; fi
+if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.command), apoi alege 6 (Configurare)."; exit 0; fi
 if [ "${KIT_NO_SETUP:-0}" != 1 ]; then exec "$KIT_DIR/run.sh" setup; fi

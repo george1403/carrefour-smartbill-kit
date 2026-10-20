@@ -17,6 +17,6 @@ if not "%KIT_NO_PAUSE%"=="1" pause
 exit /b %RC%
 :noinstall
 echo Programul nu este instalat complet (lipseste Node.js sau bibliotecile).
-echo Porneste o data install.bat, apoi incearca din nou.
+echo Da dublu-click o data pe install.bat, apoi incearca din nou.
 if not "%KIT_NO_PAUSE%"=="1" pause
 exit /b 9

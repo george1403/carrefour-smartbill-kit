@@ -12,7 +12,7 @@ async function run() {
   (maj >= 20 ? ok : no)(`Node.js ${process.versions.node} (${process.platform}-${process.arch})`);
   for (const m of ['dotenv', 'playwright', 'tesseract.js', 'pngjs']) { try { require(m); ok(`modul ${m}`); } catch (e) { no(`modul ${m}: ${e.message}`); } }
   for (const f of ['data/carrefour.json', 'data/carrefour-stores.json']) { try { JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8')); ok(f); } catch (e) { no(`${f}: ${e.message}`); } }
-  for (const m of ['config', 'smartbillWeb', 'discoverSmartbill', 'carrefourPortal', 'setup', 'orders', 'fillInvoice', 'orderInput', 'captchaOcr', 'errors', 'importConfig', 'auto', 'schedule', 'menu', 'masterData']) { try { require(`./${m}`); ok(`src/${m}.js`); } catch (e) { no(`src/${m}.js: ${e.message}`); } }
+  for (const m of ['config', 'smartbillWeb', 'discoverSmartbill', 'carrefourPortal', 'setup', 'orders', 'fillInvoice', 'orderInput', 'captchaOcr', 'errors', 'importConfig', 'auto', 'schedule', 'menu', 'masterData', 'color', 'support']) { try { require(`./${m}`); ok(`src/${m}.js`); } catch (e) { no(`src/${m}.js: ${e.message}`); } }
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
   const ai = Object.keys(lock.packages || {}).map(k => k.replace(/^.*node_modules\//, '')).filter(n => AI.test(n));
   (ai.length ? no : ok)(`fara dependinte AI/LLM${ai.length ? ': ' + ai.join(', ') : ''}`);

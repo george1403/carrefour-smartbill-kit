@@ -34,9 +34,9 @@ function bareProfile(name, envFile = path.join(ROOT, '.env')) {
 
 function loadProfile(name) {
   const profileName = name || process.env.KIT_PROFILE || readDefaultProfile();
-  if (!profileName) throw new Error('Niciun profil. Ruleaza: node bin/kit.js setup');
+  if (!profileName) throw Object.assign(new Error('Niciun profil. Deschide programul (scurtatura Carrefour SmartBill de pe Desktop) si alege 6 (Configurare).'), { code: 'CONFIG' });
   const file = path.join(ROOT, 'profiles', `${profileName}.json`);
-  if (!fs.existsSync(file)) throw new Error(`Profilul ${profileName} nu exista (${file}). Ruleaza: node bin/kit.js setup`);
+  if (!fs.existsSync(file)) throw Object.assign(new Error(`Profilul ${profileName} nu exista (${file}). Deschide programul (scurtatura Carrefour SmartBill de pe Desktop) si alege 6 (Configurare).`), { code: 'CONFIG' });
   let cfg; try { cfg = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {
     if (e.code && /^E[A-Z]+$/.test(e.code)) throw e;
     throw Object.assign(new Error(`Fisierul de configurare profiles/${profileName}.json este deteriorat (nu se poate citi). Alege optiunea 6 (Configurare) ca sa-l refaci; datele vechi raman in out/.`), { code: 'CONFIG' }); }

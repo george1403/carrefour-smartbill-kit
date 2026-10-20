@@ -29,6 +29,9 @@ const HELP = `Comenzi:
   bulk-ciorne           (meniu 9) CIORNE IN BLOC: TOATE comenzile nefacturate din portal (fara limita de data) -> ciorne,
                         in loturi; arata lista + total si cere "da"; NU emite niciodata (nici in mod automat)
                         --check = doar lista, nu creeaza nimic; --lot=10 = marimea lotului
+  support               (meniu 13) arhiva cu jurnalele pentru suport, FARA parole
+  repair                (meniu 14) reinstaleaza browserul / bibliotecile lipsa
+  uninstall             (meniu 15) opreste verificarea automata si explica stergerea
   schedule              porneste 'auto' singur la fiecare ora (--every=MIN, --remove = opreste)
   recon                 (tehnic) poze + inventar campuri din SmartBill
 Optiuni: --profile=NUME
@@ -41,6 +44,9 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'setup') return require('../src/setup').run({ dryRun: flag('dry-run') });
   if (cmd === 'selftest') return require('../src/selftest').run();
   if (cmd === 'menu') return require('../src/menu').run();
+  if (cmd === 'support') return console.log(require('../src/support').run().text);
+  if (cmd === 'repair') { const r = require('../src/support').repair(); process.exitCode = r.ok ? 0 : 9; return; }
+  if (cmd === 'uninstall') { const s = require('../src/schedule'); console.log(s.remove()); for (const n of ['Carrefour SmartBill.lnk', 'Carrefour SmartBill.command']) { try { require('fs').unlinkSync(require('path').join(require('os').homedir(), 'Desktop', n)); console.log('Am sters scurtatura de pe Desktop.'); } catch {} } console.log('\nPoti sterge acum tot folderul programului (trage-l in Cos / Recycle Bin).\nInainte, daca vrei sa pastrezi istoricul, copiaza folderul "out" si fisierul ".env" (contine parolele tale; nu-l trimite nimanui).'); return; }
   if (cmd === 'import-config') return console.log(require('../src/importConfig').run({ from: args[1] && !args[1].startsWith('--') ? args[1] : null, auto: flag('auto') }));
   const profile = loadProfile(opt('profile'));
   if (cmd === 'login-carrefour' && (flag('relay') || opt('relay'))) { const dir = opt('relay') || require('path').join(profile.dirs.out, 'captcha-relay'); return console.log(await require('../src/carrefourPortal').captchaRelay(profile, { dir })); }
@@ -65,7 +71,9 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'auto') { const a = require('../src/auto'); const o = { check: flag('check'), mode: flag('draft-only') ? 'ciorne' : undefined };
     if (flag('watch')) { const r = await a.watch(profile, { ...o, every: Number(opt('every') || 60) }); process.exitCode = r.exit || 0; return; }
     const r = await a.runOnce(profile, o); process.exitCode = r.exit != null ? r.exit : (r.errors?.length ? 1 : 0); return; }
-  if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10) }); process.exitCode = r.exit || 0; return; }
+  if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10) });
+    if (process.env.KIT_BULK_SUMMARY) require('fs').writeFileSync(process.env.KIT_BULK_SUMMARY, JSON.stringify({ todo: (r.preview || []).length, exit: r.exit || 0 }));
+    process.exitCode = r.exit || 0; return; }
   if (cmd === 'schedule') return console.log(flag('remove') ? require('../src/schedule').remove() : require('../src/schedule').install({ every: Number(opt('every') || 60), profile: opt('profile') }));
   if (cmd === 'orders') return void await require('../src/orders').list(profile);
   if (cmd === 'fill' || cmd === 'ciorna' || cmd === 'preview') {
@@ -85,8 +93,13 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   console.error('Comanda necunoscuta: ' + cmd + '\n\n' + HELP); process.exit(1);
 })().catch(e => {
   const { classify, HELP } = require('../src/errors'); const c = classify(e);
-  if (c.exit === 2) { console.error('\nOPRIT: ' + c.message); process.exit(2); }
-  console.error('\nEROARE: ' + (process.env.KIT_DEBUG ? (e.stack || e.message) : c.message));
+  const col = require('../src/color').stderr;
+  if (c.exit === 2) { console.error('\n' + col.warn('OPRIT: ') + c.message); process.exit(2); }
+  console.error('\n' + col.err('EROARE: ') + (process.env.KIT_DEBUG ? (e.stack || e.message) : c.message));
   if (HELP[c.exit] && c.exit !== 1) console.error('CE FACI: ' + HELP[c.exit]);
+  try { const fs = require('fs'), pth = require('path'); const d = pth.join(__dirname, '..', 'logs'); fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(pth.join(d, 'ultima-eroare.txt'), `[${new Date().toLocaleString('ro-RO')}] comanda: ${cmd || '-'} | cod ${c.exit || 1}\nEROARE: ${c.message}\n${require('../src/color').strip(require('../src/errors').ceFaci(c.exit || 1, require('../src/color').make(false)))}\n`); } catch {}
+  // the menu prints the numbered box itself (and offers the fix); direct runs (double-click shortcuts, scheduled) get it here
+  if (!process.env.KIT_IN_MENU) console.error(require('../src/errors').ceFaci(c.exit || 1));
   process.exit(c.exit || 1);
 });

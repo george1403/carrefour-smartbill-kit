@@ -200,7 +200,7 @@ const canAskHuman = () => process.env.KIT_UNATTENDED !== '1' && hasDisplay() && 
  * Ends with MANUAL_LOGIN if the window is closed or after timeoutMs (default 10 min). One window per call, never a loop.
  */
 async function headedLogin(profile, { timeoutMs = Number(process.env.KIT_MANUAL_TIMEOUT_MS || 10 * 60e3), log = console.log } = {}) {
-  if (!hasDisplay()) throw kitError('LOGIN_NEEDED', 'Calculatorul nu are ecran pentru fereastra de autentificare. Pe server: node bin/kit.js login-carrefour --relay');
+  if (!hasDisplay()) throw kitError('LOGIN_NEEDED', 'Calculatorul nu are ecran pentru fereastra de autentificare. Porneste programul pe un calculator cu ecran si alege 5 (Autentificare Carrefour).');
   const s = await open(profile, { headless: process.env.KIT_TEST_HEADLESS === '1' });
   let closed = false; s.browser.on('disconnected', () => { closed = true; }); s.page.on('close', () => { closed = true; });
   if (process.env.KIT_TEST_CLOSE_MS) setTimeout(() => s.page.close().catch(() => {}), Number(process.env.KIT_TEST_CLOSE_MS)); // tests: 'window closed early'
@@ -285,7 +285,7 @@ async function interactiveLogin(profile, { headed = hasDisplay(), ocrFirst = tru
 
 /** No screen (server over SSH): the CAPTCHA image is saved to a file and the code is typed in the terminal. Max 3 submits. */
 async function promptLogin(profile) {
-  if (!process.stdin.isTTY) throw kitError('LOGIN_NEEDED', 'Fara ecran si fara terminal: foloseste node bin/kit.js login-carrefour --relay');
+  if (!process.stdin.isTTY) throw kitError('LOGIN_NEEDED', 'Nu pot deschide fereastra de autentificare aici. Deschide programul (scurtatura Carrefour SmartBill de pe Desktop) si alege 5 (Autentificare Carrefour).');
   const s = await open(profile);
   try {
     let st = await nav(s); if (st.state === 'in') { await s.save(); return 'deja-logat'; }
@@ -340,7 +340,7 @@ async function captchaRelay(profile, { dir, timeoutMs = 10 * 60 * 1000 } = {}) {
     await s.page.goto(DOCS_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }); await delay(2500);
     if (!(await onLoginForm(s.page))) { await s.save(); st({ state: 'deja-logat' }); return 'deja-logat'; }
     const type = await detectCaptcha(s.page); wf(path.join(dir, 'captcha-type.json'), JSON.stringify(type, null, 2));
-    if (type.recaptcha || type.hcaptcha || type.turnstile) { st({ state: 'captcha-interactiv', type }); throw new Error('CAPTCHA interactiv (reCAPTCHA/hCaptcha): foloseste login-carrefour intr-o fereastra vizibila.'); }
+    if (type.recaptcha || type.hcaptcha || type.turnstile) { st({ state: 'captcha-interactiv', type }); throw new Error('CAPTCHA interactiv (reCAPTCHA/hCaptcha): alege 5 (Autentificare Carrefour) din meniu.'); }
     for (let attempt = 1; attempt <= 3;) {
       if (fs.existsSync(answerFile)) fs.unlinkSync(answerFile);
       const found = (await captchaVisible(s.page)) ? (await detectCaptcha(s.page)).imageSrc : null;

@@ -77,7 +77,7 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
     rep.portalOrders = orders.length;
     for (const x of p) { if (x.skip) rep.skipped.push({ orderNo: x.orderNo, why: x.skip }); else if (x.draft) rep.alreadyDraft.push({ orderNo: x.orderNo, draftId: x.draft, why: `are deja ciorna (id ${x.draft})` }); }
     const pv = previewText(p); L(pv.text); rep.preview = pv.todo.map(x => ({ orderNo: x.orderNo, date: x.date, store: x.store, total: x.total })); rep.previewTotal = Number(money(pv.sum));
-    if (check) { L('--check: doar previzualizare, nu am creat nimic.'); return rep; }
+    if (check) { L('Doar lista (optiunea 10): nu am creat nimic. Ca sa le creezi, alege 9.'); return rep; }
     if (!pv.todo.length) { L('Nimic de facut: nu exista comenzi nefacturate fara ciorna.'); return rep; }
     const ans = String(await (confirm || askYes)(`\nCreez ${pv.todo.length} ciorne in SmartBill (in loturi de ${batch})? Scrie "da" pentru a continua: `) || '').trim().toLowerCase();
     if (ans !== 'da') { L('Nu ai confirmat cu "da": nu am creat nimic.'); rep.cancelled = true; rep.remaining = pv.todo.map(x => x.orderNo); return rep; }
