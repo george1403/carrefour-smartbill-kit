@@ -33,7 +33,7 @@ T('F06', 'kit.js uninstall (HOME separat): mesaj clar, scurtatura altui kit rama
   const o = r.stdout + r.stderr; if (fs.existsSync(mine)) return 'nu a sters scurtatura proprie'; if (!fs.existsSync(keep)) return 'a sters scurtatura altui kit';
   return /Am lasat pe Desktop/.test(o) && /trage-l in Cos/.test(o) || o; });
 T('F07', 'Instalatoarele nu afiseaza comenzi (npm ci) in mesajele pentru producator', () => {
-  const t = ['install.ps1', 'scripts/install-unix.sh'].map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  const t = ['install.ps1', 'scripts/install-unix.sh'].filter(f => fs.existsSync(path.join(ROOT, f))).map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n'); if (!t) return 'niciun instalator';
   const shown = t.split('\n').filter(l => /Write-Host|say |fail |Fail /.test(l) && !/install-deps|Linux/.test(l) && /npm ci|npx |playwright install/.test(l.replace(/^[^"]*"|"[^"]*$/g, '')));
   return shown.length ? shown.join(' | ') : true; });
 T('F08', 'SmartBill fara email/parola -> cod 10 (Configurare), fara nume tehnice', () => {
