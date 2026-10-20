@@ -116,7 +116,7 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
       try {
         const r = await require('./fillInvoice').run(profile, { orderNo: o.orderNo, issue: mode === 'automat', draftOnly: mode !== 'automat', log: () => {} });
         const i = r.issued || {}; summary.done.push({ orderNo: o.orderNo, result: mode === 'automat' ? `factura ${i.number || i.invoiceId || ''}` : `ciorna id ${i.invoiceId || ''}` });
-        L(`  ${o.orderNo}: ${mode === 'automat' ? 'FACTURA emisa ' + (i.number || i.invoiceId || '') : 'CIORNA creata (id ' + (i.invoiceId || '?') + ') - verific-o si emite-o din SmartBill > Ciorne'}`);
+        L(`  ${o.orderNo}: ${mode === 'automat' ? 'FACTURA emisa ' + (i.number || i.invoiceId || '') : 'CIORNA creata (id ' + (i.invoiceId || '?') + ') - verific-o si emite-o din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna'}`);
         if (mode === 'automat') issuedNow.push({ orderNo: o.orderNo, number: i.number || null, invoiceId: i.invoiceId || null, store: o.store, total: o.total });
         delete state[nz(o.orderNo)];
       } catch (e) {

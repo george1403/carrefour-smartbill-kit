@@ -18,7 +18,7 @@ const HELP = {
 // Pasi numerotati pentru caseta CE FACI (fiecare spune ce optiune din MENIU alegi; niciodata comenzi de scris).
 const STEPS = {
   1: ['Citeste mesajul EROARE de mai sus.', 'Incearca din nou aceeasi optiune din meniu.'],
-  2: ['Nu ai nimic de facut: comanda are deja factura sau ciorna in SmartBill.', 'Verifica in SmartBill > Facturi / Ciorne, daca vrei.'],
+  2: ['Nu ai nimic de facut: comanda are deja factura sau ciorna in SmartBill.', 'Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna, daca vrei.'],
   3: ['Alege 5 (Autentificare Carrefour).', 'In fereastra care se deschide scrie codul din imagine si apasa Autentificare.', 'Dupa ce fereastra se inchide, alege din nou optiunea pe care o voiai.'],
   4: ['Verifica utilizatorul si parola intrand o data in portal / SmartBill din browser.', 'Alege 6 (Configurare) si scrie-le din nou.', 'Nu am reincercat, ca sa nu se blocheze contul.'],
   5: ['Verifica internetul (deschide o pagina in browser).', 'Asteapta cateva minute si alege din nou aceeasi optiune.', 'Ce era deja facut nu se dubleaza.'],
@@ -27,7 +27,7 @@ const STEPS = {
   8: ['Elibereaza spatiu pe disc (sterge fisiere mari de care nu ai nevoie).', 'Sau muta tot folderul programului in Documente.', 'Apoi alege din nou aceeasi optiune.'],
   9: ['Alege 14 (Reparare instalare) si asteapta sa scrie GATA.', 'Daca meniul nu porneste deloc: dublu-click pe install (install.command pe Mac, install.bat pe Windows).'],
   10: ['Alege 6 (Configurare) si raspunde din nou la intrebari.'],
-  11: ['Citeste mesajul de mai sus: comanda are nevoie de ochiul tau.', 'Verifica in SmartBill > Facturi si Ciorne comanda respectiva.', 'Nu am salvat nimic nou.'],
+  11: ['Citeste mesajul de mai sus: comanda are nevoie de ochiul tau.', 'Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna comanda respectiva.', 'Nu am salvat nimic nou.'],
   12: ['Alege 6 (Configurare).', 'Scrie utilizatorul si parola portalului Carrefour pentru FIRMA TA.'],
 };
 /** Caseta "CE FACI" cu pasi numerotati, in romana, cu numarul din meniu. */
@@ -61,4 +61,15 @@ function classify(e) {
   return { exit: EXIT.ERROR, message: m };
 }
 const BLOCKED_MSG = 'Windows a marcat fisierele programului ca "descarcate de pe internet" si le poate bloca. Inchide programul, click dreapta pe ZIP-ul descarcat > Proprietati > bifeaza "Deblocheaza" > OK, dezarhiveaza din nou si da dublu-click pe install.bat.';
-module.exports = { BLOCKED_MSG, EXIT, HELP, STEPS, ceFaci, kitError, classify };
+// In the browser interface the menu numbers mean nothing: "alege optiunea 5 (Autentificare Carrefour)" -> "apasa „Autentificare Carrefour”".
+const UI_NAMES = { 1: 'Vezi lista comenzilor', 2: 'Ciornă pentru o comandă', 3: 'Doar previzualizare', 4: 'Verificare automată', 5: 'Autentificare Carrefour', 6: 'Configurare', 7: 'Verificare instalare', 8: 'Preia setările din kitul vechi', 9: 'Ciorne în bloc', 10: 'Ciorne în bloc', 11: 'Verificare automată', 12: 'Recitește datele din SmartBill și Carrefour', 13: 'Raport suport', 14: 'Reparare', 15: 'Dezinstalare' };
+function uiText(t) {
+  return String(t).replace(/\(oprire: Verificare automata > Opreste; in meniul text: optiunea 11, apoi 2\)/g, '(oprire: Verificare automată > Oprește)')
+    .replace(/\b(alege(?: din nou)?|reia|optiunea)\s+(?:optiunea\s+)?(\d{1,2})\b(?:\s+din meniu)?(?:\s*\((?:[^()]|\([^)]*\))*\))?(?:\s*-\s*[A-Za-z]+\s*-)?(?:\s+din meniu)?/gi, (m, v, n) => {
+      const name = UI_NAMES[Number(n)]; if (!name) return m; const lv = v.toLowerCase(); const up = v[0] === v[0].toUpperCase();
+      const w = lv.startsWith('alege') ? (up ? 'Apasă' : 'apasă') + (lv.includes('din nou') ? ' din nou' : '') + ' ' : lv === 'reia' ? (up ? 'Apasă din nou' : 'apasă din nou') + ' ' : '';
+      return w + '„' + name + '”'; })
+    .replace(/Daca meniul nu porneste( deloc)?/g, 'Daca programul nu porneste deloc')
+    .replace(/\b(alege din nou|incearca din nou) aceeasi optiune( din meniu)?/gi, (m, v) => (v[0] === 'I' || v[0] === 'A' ? 'Apasă' : 'apasă') + ' „Încearcă din nou”');
+}
+module.exports = { uiText, UI_NAMES, BLOCKED_MSG, EXIT, HELP, STEPS, ceFaci, kitError, classify };

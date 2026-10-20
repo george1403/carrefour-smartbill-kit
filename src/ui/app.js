@@ -24,7 +24,7 @@
     8: { t: 'Nu pot scrie pe disc', s: ['Eliberează spațiu pe disc sau mută folderul programului în Documente.', 'Apoi apasă „Încearcă din nou”.'], fix: ['retry', 'Încearcă din nou'] },
     9: { t: 'Instalarea e incompletă', s: ['Apasă „Repară instalarea” și așteaptă să scrie GATA.', 'Apoi apasă „Reia”.'], fix: ['repair', 'Repară instalarea'] },
     10: { t: 'Configurarea lipsește sau e incompletă', s: ['Apasă „Configurare” și răspunde la întrebări.'], fix: ['go:setup', 'Configurare'] },
-    11: { t: 'Are nevoie de verificarea ta', s: ['Citește mesajul de mai jos.', 'Verifică în SmartBill > Facturi și Ciorne comanda respectivă.', 'Nu am salvat nimic nou.'], fix: ['go:history', 'Vezi istoricul'] },
+    11: { t: 'Are nevoie de verificarea ta', s: ['Citește mesajul de mai jos.', 'Verifică în SmartBill > Rapoarte > Facturi > Filtrare > Ciornă comanda respectivă.', 'Nu am salvat nimic nou.'], fix: ['go:history', 'Vezi istoricul'] },
     12: { t: 'Contul Carrefour NU este al firmei tale', s: ['Programul s-a oprit și nu a citit nimic.', 'Apasă „Configurare” și scrie utilizatorul și parola portalului pentru FIRMA TA.'], fix: ['go:setup', 'Configurare'] }
   };
 
@@ -127,7 +127,7 @@
       if (!r) return h;
       if (r.mode === 'ciorne') {
         h += '<div class="card"><h2>Rezultat: ' + r.created.length + ' ciorne create</h2>' + table(r.created, true) + listOf('Aveau deja ciornă', r.alreadyDraft, 'why') + listOf('Sărite', r.skipped, 'why') + listOf('Erori', r.errors, 'error') +
-          (r.remaining.length ? '<p class="warn"><b>Neprocesate:</b> ' + esc(r.remaining.join(', ')) + '. Reia mai târziu; ce e făcut nu se dublează.</p>' : '') + '<p><b>Ciornele sunt în SmartBill > Ciorne. Verifică-le și emite-le tu.</b></p></div>';
+          (r.remaining.length ? '<p class="warn"><b>Neprocesate:</b> ' + esc(r.remaining.join(', ')) + '. Reia mai târziu; ce e făcut nu se dublează.</p>' : '') + '<p><b>Ciornele sunt în SmartBill > Rapoarte > Facturi > Filtrare > Ciornă. Verifică-le și emite-le tu.</b></p></div>';
         return h;
       }
       h += '<div class="card"><h2>De făcut ciornă: ' + r.preview.length + ' comenzi, total ' + money(r.previewTotal) + ' lei fără TVA</h2>' + (r.preview.length ? table(r.preview) : '<p class="ok"><b>Nimic de făcut: toate comenzile au deja factură sau ciornă.</b></p>') +
@@ -139,7 +139,7 @@
       return back + '<h1>Autentificare Carrefour</h1><div class="card needidle"><p>Folosește-o când programul îți cere („Portalul Carrefour cere autentificarea”).</p><ol><li>Apasă butonul de mai jos.</li><li>Programul încearcă singur să citească codul din imagine.</li><li>Dacă nu reușește, se deschide o fereastră a portalului Carrefour: <b>scrie codul din imagine și apasă Autentificare</b>. Fereastra se închide singură.</li></ol><button class="btn big green" data-run="login">Autentifică-mă</button></div>';
     },
     auto: function (s) {
-      var lim = s.mode === 'automat' ? '<ul><li>Prima verificare automată într-un folder doar <b>arată</b> ce ar face; facturile se emit de la a doua.</li><li>Cel mult <b>' + esc(Math.min(10, s.maxPerRun || 3)) + '</b> facturi la o verificare (plafon 10).</li><li>La orice îndoială se oprește; comanda rămâne ciornă în SmartBill > Ciorne.</li><li>Facturile emise apar în fișierul FACTURI-EMISE-AUTOMAT.txt și primești o notificare.</li><li><b>Atenție:</b> dacă în SmartBill e pornită trimiterea automată în SPV, factura pleacă singură la ANAF.</li></ul>'
+      var lim = s.mode === 'automat' ? '<ul><li>Prima verificare automată într-un folder doar <b>arată</b> ce ar face; facturile se emit de la a doua.</li><li>Cel mult <b>' + esc(Math.min(10, s.maxPerRun || 3)) + '</b> facturi la o verificare (plafon 10).</li><li>La orice îndoială se oprește; comanda rămâne ciornă în SmartBill > Rapoarte > Facturi > Filtrare > Ciornă.</li><li>Facturile emise apar în fișierul FACTURI-EMISE-AUTOMAT.txt și primești o notificare.</li><li><b>Atenție:</b> dacă în SmartBill e pornită trimiterea automată în SPV, factura pleacă singură la ANAF.</li></ul>'
         : '<ul><li>Face doar <b>CIORNE</b> pentru comenzile noi (nicio factură emisă).</li><li>Doar comenzile primite după configurare și nu mai vechi de 14 zile (cele vechi: „Ciorne în bloc”).</li><li>Cel mult ' + esc(s.maxPerRun || 10) + ' ciorne la o verificare.</li><li>Nu dublează nimic: verifică în SmartBill înainte de fiecare ciornă.</li></ul>';
       return back + '<h1>Verificare automată</h1><div class="card needidle"><p class="big-state">Verificare la fiecare oră: ' + (s.schedule ? '<span class="ok">PORNITĂ</span>' : '<span class="err">OPRITĂ</span>') + '</p><p>Cât timp calculatorul e pornit, programul verifică singur comenzile noi.</p>' +
         (s.schedule ? '<button class="btn big red" data-run="schedule-off">Oprește verificarea</button>' : '<button class="btn big green" data-run="schedule-on">Pornește verificarea (la fiecare oră)</button>') + '<button class="btn grey" data-run="auto">Verifică acum, o dată</button>' +
@@ -197,7 +197,8 @@
     if (b.dataset.ans != null) { answer(b.dataset.ans); return; }
     if (b.dataset.reveal) { api('POST', '/api/reveal', { file: b.dataset.reveal }); return; }
     if (b.dataset.fix) { var fx = b.dataset.fix; if (fx.indexOf('go:') === 0) { S.dismissed = S.job.id; renderJob(); go(fx.slice(3)); return; }
-      if (fx === 'retry') { if (S.last && S.last.action) api('POST', '/api/run', S.last).then(startResp); else act('bulk-check'); return; }
+      if (fx === 'retry') { if (S.last && S.last.action === 'setup') { S.dismissed = S.job.id; renderJob(); go('setup'); showMsg('Configurare', 'Verifică datele și apasă din nou „Pornește configurarea”. Parolele nu se păstrează în pagină, așa că scrie-le din nou (sau alege „Folosesc conturile salvate”).'); return; }
+        if (S.last && S.last.action) api('POST', '/api/run', S.last).then(startResp); else act('bulk-check'); return; }
       var prev = S.last; S.after = prev && prev.action !== fx ? { body: prev, title: S.job.title } : null; run(fx).then(function () { S.last = prev; }); return; }
     if (b.dataset.act) act(b.dataset.act, b);
   });
@@ -211,7 +212,7 @@
     if (a === 'import-list') { S.onDone = function (j) { var d = j.result && j.result.dir; if (!d) { showMsg('Nu am găsit', 'Nu am găsit un kit vechi configurat în Descărcări, Desktop, Documente sau lângă acest folder. Fă Configurarea.'); return; }
       confirmBox('<h2>Preiau setările din acest folder?</h2><p class="note"><b>' + esc(d) + '</b></p><p>Copiez conturile, profilul și jurnalul comenzilor din kitul vechi. Kitul vechi rămâne neatins. Confirmă doar dacă e <b>kitul TĂU</b>.</p>', 'Da, preia din acest folder', function () { api('POST', '/api/import', { dir: d, confirm: true }).then(startResp); }); }; run('import-list'); return; }
     if (a === 'bulk-check') { S.bulk = null; S.onDone = function (j) { if (j.result) { S.bulk = j.result; } }; run('bulk-check'); return; }
-    if (a === 'bulk-create') { var of = S.bulk.offer; confirmBox('<h2>Creez ' + of.count + ' ciorne în SmartBill?</h2><p>Se fac <b>doar CIORNE</b>. <b>NU se emite nicio factură.</b> Le verifici și le emiți tu din SmartBill > Ciorne.</p>', 'Da, creează ' + of.count + ' ciorne', function () {
+    if (a === 'bulk-create') { var of = S.bulk.offer; confirmBox('<h2>Creez ' + of.count + ' ciorne în SmartBill?</h2><p>Se fac <b>doar CIORNE</b>. <b>NU se emite nicio factură.</b> Le verifici și le emiți tu din SmartBill > Rapoarte > Facturi > Filtrare > Ciornă.</p>', 'Da, creează ' + of.count + ' ciorne', function () {
       var body = { offer: of.id, count: of.count, confirm: true }; S.last = body; S.onDone = function (j) { if (j.result) S.bulk = j.result; }; api('POST', '/api/bulk-create', body).then(startResp); }); return; }
     if (a === 'uninstall') { confirmBox('<h2>Dezinstalez programul?</h2><p>Se oprește verificarea automată și se șterg scurtăturile de pe Desktop.</p>', 'Da, dezinstalează', function () { S.onDone = function (j) { if (j.exit === 0) go('bye'); }; run('uninstall', { confirm: true }); }); return; }
     if (a === 'setup') { var f = S.form, s = S.status, body = { reuse: !!(s.envSaved && f.reuse), mode: f.mode === 'automat' ? 'automat' : 'ciorne', schedule: !!($('#sch') || {}).checked };

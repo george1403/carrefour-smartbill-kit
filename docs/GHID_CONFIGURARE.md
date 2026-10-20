@@ -56,14 +56,18 @@ Parolele raman doar pe calculatorul tau si nu apar niciodata pe ecran.
 ## 5. Ciornă pentru o comandă
 Scrii **numarul comenzii Carrefour** (ex. 1780308) si apesi **Fă ciorna**. Factura se salveaza in SmartBill ca **ciorna** (nu se emite). Daca exista deja factura sau ciorna, programul se opreste si scrie **OPRIT, ca să nu faci o dublă**. *Doar previzualizare* completeaza formularul fara sa salveze nimic; *Vezi lista comenzilor* iti arata comenzile din portal.
 
-## 6. Ciorne în bloc (toate comenzile nefacturate)
+## 6. Ciorne în bloc (toate comenzile nefacturate) — OPȚIONAL, doar la nevoie
+*Aveți nevoie de acest capitol doar dacă aveți comenzi mai vechi, de dinainte de configurare, care încă nu au factură. Dacă toate comenzile vechi sunt facturate, săriți peste el.* Înainte, faceți calibrarea: câteva ciorne una câte una, verificate în SmartBill > **Rapoarte > Facturi > Filtrare > Ciornă** (fără filtru, ciornele nu apar).
+
 1. Apesi **Arată lista**. Programul citeste **toate** comenzile din portal, oricat de vechi, si iti arata un tabel: comanda, data, magazinul, totalul fara TVA, plus cele care **au deja ciornă** si cele **sărite** (cu motiv). **Nu se creeaza nimic.**
 2. Apesi **Creează ciornele (N)**. Apare o confirmare: bifezi **Am înțeles** si apesi **Da, creează N ciorne**.
 3. Programul le face pe rand, in loturi de cate 10, verificand inainte de fiecare ca nu exista deja factura sau ciorna. La final vezi tabelul cu ciornele create.
 
-Face **numai ciorne**, chiar si in modul *automat*: **nu emite nicio factura**. Le verifici si le emiti din SmartBill > Ciorne.
+Face **numai ciorne**, chiar si in modul *automat*: **nu emite nicio factura**. Le verifici si le emiti din SmartBill > Rapoarte > Facturi > Filtrare > Ciornă.
 
-## 7. Autentificare Carrefour (codul din imagine)
+## 7. Autentificare Carrefour (codul din imagine) — OPȚIONAL, doar la nevoie
+*Aveți nevoie de acest capitol doar când programul spune „Portalul Carrefour cere autentificarea” sau când la Probleme deschise apare butonul Autentificare. Dacă nu vedeți niciodată acest mesaj, săriți peste el.*
+
 Cand programul spune „Portalul Carrefour cere autentificarea”, apasa **Autentificare Carrefour** → **Autentifică-mă**. Programul incearca singur codul; daca nu reuseste, se deschide o fereastra a portalului: scrie codul din imagine si apasa *Autentificare*. Fereastra se inchide singura. Daca problema a aparut in timpul altei actiuni, dupa GATA apasa **Reia**.
 
 In verificarea automata (cand nu esti la calculator) programul se opreste, arata o notificare si scrie **ATENTIE-autentificare-Carrefour.txt**; pe ecranul principal apare la *Probleme deschise* cu butonul **Autentificare**. Programul nu reincearca o parola gresita (ca sa nu se blocheze contul).
@@ -75,7 +79,9 @@ Arata daca verificarea la fiecare ora e **PORNITĂ** sau **OPRITĂ** si ce face 
 
 Butoane: **Pornește** / **Oprește** si **Verifică acum, o dată**. Fiecare folder de program are propria verificare: oprirea sau pornirea intr-un folder nu o atinge pe a altui folder.
 
-## 9. Istoric, Raport suport, Reparare
+## 9. Istoric, Raport suport, Reparare — OPȚIONAL, doar la nevoie
+*Istoric: doar când vreți să vedeți ce a făcut programul. Raport suport: doar când apare caseta roșie **CE FACI** și pașii din ea nu rezolvă problema. Reparare: doar când programul spune că lipsește browserul sau o parte din instalare.*
+
 - **Istoric**: ultimele actiuni, ciornele facute (cu id-ul din SmartBill), rularile *Ciorne în bloc* si facturile emise automat.
 - **Raport suport**: un clic face fisierul **RAPORT-SUPORT-<data>.zip** in folderul programului (FARA parole) si deschide fereastra cu el selectat (**Arată fișierul**). **Trimite-l lui George pe WhatsApp sau email.**
 - **Reparare**: descarca din nou browserul programului daca lipseste (*Repară instalarea*) si verifica instalarea.
@@ -86,8 +92,8 @@ Butoane: **Pornește** / **Oprește** si **Verifică acum, o dată**. Fiecare fo
 3. Daca aveai verificarea la fiecare ora: opreste-o in programul vechi si porneste-o in cel nou (**Verificare automată**).
 4. Kitul vechi ramane neatins; dupa ce vezi ca totul merge, il poti sterge.
 
-## 11. Dezinstalare
-Butonul **Dezinstalare** → bifezi **Am înțeles** → **Da, dezinstalează**: opreste verificarea automata a acestui folder si sterge scurtaturile de pe Desktop. Apoi trage folderul programului in **Cos** (Mac) / **Recycle Bin** (Windows).
+## 11. Dezinstalare — OPȚIONAL, doar dacă nu mai folosiți programul
+Butonul **Dezinstalare** → bifezi **Am înțeles** → **Da, dezinstalează**: opreste verificarea automata a acestui folder si sterge scurtaturile de pe Desktop ale acestui folder (scurtaturile altui folder al programului raman). Apoi trage folderul programului in **Cos** (Mac) / **Recycle Bin** (Windows).
 
 ## Meniul text (rezerva)
 Scurtatura **Carrefour SmartBill - Meniu text** deschide vechiul meniu cu numere (1–15, aceleasi actiuni): scrii numarul optiunii si apesi Enter. 2 = ciorna, 5 = autentificare, 6 = configurare, 8 = preia din kitul vechi (cu confirmare), 9 = ciorne in bloc, 11 = verificare la fiecare ora, 13 = raport suport, 14 = reparare, 15 = dezinstalare.

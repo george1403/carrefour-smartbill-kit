@@ -49,7 +49,10 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'ui') { await require('../src/ui/server').main({ demo: flag('demo'), open: !flag('no-open') }); return; }
   if (cmd === 'support') return console.log(require('../src/support').run().text);
   if (cmd === 'repair') { const r = require('../src/support').repair(); process.exitCode = r.ok ? 0 : 9; return; }
-  if (cmd === 'uninstall') { const s = require('../src/schedule'); console.log(s.remove()); for (const n of ['Carrefour SmartBill.lnk', 'Carrefour SmartBill.command', 'Carrefour SmartBill.app', 'Carrefour SmartBill - Meniu text.lnk', 'Carrefour SmartBill - Meniu text.command']) { const f = require('path').join(require('os').homedir(), 'Desktop', n); if (require('fs').existsSync(f)) { try { require('../src/fsx').rm(f); console.log('Am sters scurtatura de pe Desktop: ' + n); } catch {} } } console.log('\nPoti sterge acum tot folderul programului (trage-l in Cos / Recycle Bin).\nInainte, daca vrei sa pastrezi istoricul, copiaza folderul "out" si fisierul ".env" (contine parolele tale; nu-l trimite nimanui).'); return; }
+  if (cmd === 'uninstall') { const s = require('../src/schedule'); console.log(s.remove()); const r = require('../src/shortcuts').removeMine();
+    for (const n of r.removed) console.log('Am sters scurtatura de pe Desktop: ' + n);
+    if (r.kept.length) console.log('Am lasat pe Desktop ' + r.kept.join(', ') + ': porneste alt folder al programului, nu pe acesta.');
+    console.log('\nPoti sterge acum tot folderul programului (trage-l in Cos / Recycle Bin).\nInainte, daca vrei sa pastrezi istoricul, copiaza folderul "out" si fisierul ".env" (contine parolele tale; nu-l trimite nimanui).'); return; }
   if (cmd === 'import-config' && flag('list')) return console.log(JSON.stringify(require('../src/importConfig').list()));
   if (cmd === 'import-config') return console.log(require('../src/importConfig').run({ from: args[1] && !args[1].startsWith('--') ? args[1] : null, auto: flag('auto') }));
   const profile = loadProfile(opt('profile'));

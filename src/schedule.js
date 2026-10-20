@@ -32,7 +32,7 @@ function install({ every = 60, profile = null, dryRun = false } = {}) {
     wf(cmd, `@echo off\r\nset "KIT_NO_PAUSE=1"\r\nset "KIT_UNATTENDED=1"\r\ncall "%~dp0..\\run.bat" auto ${pa.join(' ')}\r\n`);
     const a = ['/Create', '/F', '/TN', NAME, '/SC', 'MINUTE', '/MO', String(every), '/TR', `"${cmd}"`];
     if (!dryRun) { sh('schtasks', a); removeLegacyIfMine(); }
-    return `Programat: Windows Task Scheduler "${NAME}", la fiecare ${every} minute (oprire: meniu, optiunea 11, apoi 2).`;
+    return `Programat: Windows Task Scheduler "${NAME}", la fiecare ${every} minute (oprire: Verificare automata > Opreste; in meniul text: optiunea 11, apoi 2).`;
   }
   if (process.platform === 'darwin') {
     const label = LABEL; const f = plistFile(LABEL);
@@ -42,7 +42,7 @@ function install({ every = 60, profile = null, dryRun = false } = {}) {
     fs.mkdirSync(path.dirname(f), { recursive: true }); fs.mkdirSync(path.join(ROOT, 'out'), { recursive: true });
     try { sh('launchctl', ['unload', f]); } catch {}
     wf(f, plist); sh('launchctl', ['load', '-w', f]); removeLegacyIfMine();
-    return `Programat: macOS launchd (${f}), la fiecare ${every} minute (oprire: meniu, optiunea 11, apoi 2).`;
+    return `Programat: macOS launchd (${f}), la fiecare ${every} minute (oprire: Verificare automata > Opreste; in meniul text: optiunea 11, apoi 2).`;
   }
   const line = `*/${Math.min(every, 59)} * * * * KIT_UNATTENDED=1 /bin/bash ${JSON.stringify(path.join(ROOT, 'run.sh'))} auto ${pa.join(' ')} >> ${JSON.stringify(path.join(ROOT, 'out', 'auto-cron.log'))} 2>&1 # ${NAME}`;
   const cronLine = every >= 60 ? line.replace(/^\*\/\d+ \* /, `0 */${Math.min(23, Math.round(every / 60))} `) : line;
@@ -50,7 +50,7 @@ function install({ every = 60, profile = null, dryRun = false } = {}) {
   let cur = ''; try { cur = sh('crontab', ['-l']); } catch {}
   const next = cur.split('\n').filter(l => l && !l.includes(`# ${NAME}`)).concat(cronLine).join('\n') + '\n';
   sh('crontab', ['-'], { input: next }); removeLegacyIfMine();
-  return `Programat: cron (Linux), la fiecare ${every} minute (oprire: meniu, optiunea 11, apoi 2).`;
+  return `Programat: cron (Linux), la fiecare ${every} minute (oprire: Verificare automata > Opreste; in meniul text: optiunea 11, apoi 2).`;
 }
 
 function remove() {

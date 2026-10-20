@@ -6,7 +6,7 @@ const fs = require('fs'); const path = require('path'); const os = require('os')
 const ROOT = path.resolve(__dirname, '..');
 const isKit = d => { try { return fs.existsSync(path.join(d, 'bin', 'kit.js')) && fs.existsSync(path.join(d, '.env')) && path.resolve(d) !== ROOT; } catch { return false; } };
 function candidates() {
-  const dirs = new Set(); const parents = [path.dirname(ROOT), path.join(os.homedir(), 'Downloads'), path.join(os.homedir(), 'Desktop'), path.join(os.homedir(), 'Documents'), os.homedir()];
+  const dirs = new Set(); const parents = [path.dirname(ROOT), path.join(os.homedir(), 'Downloads'), path.join(os.homedir(), 'Desktop'), path.join(os.homedir(), 'Documents'), os.homedir(), ...['OneDrive', 'OneDriveConsumer', 'OneDriveCommercial'].filter(k => process.env[k]).flatMap(k => ['Desktop', 'Documents', 'Downloads'].map(x => path.join(process.env[k], x)))];
   for (const p of parents) { let es = []; try { es = fs.readdirSync(p, { withFileTypes: true }); } catch { continue; }
     for (const e of es) if (e.isDirectory() && /carrefour.*smartbill|smartbill.*carrefour/i.test(e.name)) { const d = path.join(p, e.name); if (isKit(d)) dirs.add(d); const inner = path.join(d, 'carrefour-smartbill-kit'); if (isKit(inner)) dirs.add(inner); } }
   return [...dirs].sort((a, b) => fs.statSync(path.join(b, '.env')).mtimeMs - fs.statSync(path.join(a, '.env')).mtimeMs);

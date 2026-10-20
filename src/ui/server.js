@@ -10,7 +10,7 @@
  */
 const http = require('http'); const fs = require('fs'); const path = require('path'); const crypto = require('crypto'); const { spawn } = require('child_process');
 const ROOT = path.join(__dirname, '..', '..'); const KIT = path.join(ROOT, 'bin', 'kit.js');
-const { wf } = require('../fsx');
+const { wf } = require('../fsx'); const { uiText } = require('../errors');
 const readJ = (f, d) => { try { return JSON.parse(fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '')); } catch { return d; } };
 const tail = (f, n) => { try { return fs.readFileSync(f, 'utf8').split(/\r?\n/).filter(Boolean).slice(-n); } catch { return []; } };
 const DIGITS = s => String(s || '').replace(/\D/g, '').slice(0, 12);
@@ -60,7 +60,7 @@ function create({ demo = null, idleMs = 30 * 60e3, log = () => {} } = {}) {
     for (const f of fs.readdirSync(ROOT)) if (/^ATENTIE.*\.txt$/i.test(f)) { const t = tail(path.join(ROOT, f), 3).join(' '); problems.push({ kind: /autentific/i.test(f) ? 'login' : 'other', text: t.replace(/^\[[^\]]*\]\s*/, '').slice(0, 400), file: f }); }
     if (o) {
       const st = readJ(path.join(o, 'auto-state.json'), {}); for (const [nr, v] of Object.entries(st)) if (v && v.needsHuman) problems.push({ kind: 'order', text: `Comanda ${nr} are nevoie de verificarea ta: ${String(v.reason || v.last || '').slice(0, 200)}` });
-      for (const L of ['issued.json', 'drafts.json']) for (const [nr, v] of Object.entries(readJ(path.join(o, L), {}))) if (v && /pending|unknown|finalizing/.test(v.status || '')) problems.push({ kind: 'order', text: `Comanda ${nr}: salvare neclara (${v.status}). Verifica in SmartBill > Facturi si Ciorne.` });
+      for (const L of ['issued.json', 'drafts.json']) for (const [nr, v] of Object.entries(readJ(path.join(o, L), {}))) if (v && /pending|unknown|finalizing/.test(v.status || '')) problems.push({ kind: 'order', text: `Comanda ${nr}: salvare neclara (${v.status}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` });
     }
     if (process.platform === 'win32') { try { if (fs.existsSync(path.join(ROOT, 'run.bat') + ':Zone.Identifier')) problems.push({ kind: 'other', text: require('../errors').BLOCKED_MSG }); } catch {} }
     if (!fs.existsSync(path.join(ROOT, '.env')) || !prof) problems.unshift({ kind: 'setup', text: profErr || 'Programul nu este configurat inca.' });
@@ -68,7 +68,7 @@ function create({ demo = null, idleMs = 30 * 60e3, log = () => {} } = {}) {
     const h = tail(path.join(ROOT, 'logs', 'meniu-istoric.log'), 1)[0] || null;
     return { demo: !!demo, configured: !!prof && !(prof.missing || []).length, profile: name, company: cfg.company && cfg.company.name || null, series: cfg.smartbill && cfg.smartbill.series || null,
       mode: cfg.auto && cfg.auto.mode || null, armed: !!(o && fs.existsSync(path.join(o, 'automat-armat.json'))), maxPerRun: cfg.auto && cfg.auto.maxPerRun || null,
-      schedule: sched, envSaved: fs.existsSync(path.join(ROOT, '.env')), lastRun: h ? clean(h) : null, problems: problems.slice(0, 20).map(p => ({ ...p, text: clean(p.text) })),
+      schedule: sched, envSaved: fs.existsSync(path.join(ROOT, '.env')), lastRun: h ? clean(h) : null, problems: problems.slice(0, 20).map(p => ({ ...p, text: uiText(clean(p.text)) })),
       busy: !!(job && job.running) || engineBusy(), job: job ? { id: job.id, action: job.action, running: job.running } : null, platform: process.platform };
   }
 
@@ -101,7 +101,7 @@ function create({ demo = null, idleMs = 30 * 60e3, log = () => {} } = {}) {
     const j = job = { id: ++jobSeq, action, title: def.title + (args[1] && !String(args[1]).startsWith('--') ? ' ' + args[1] : ''), running: true, lines: [], partial: '', question: null, exit: null, result: null, started: Date.now(), answers: action === 'setup' ? setupAnswers(a) : [] };
     const child = j.child = spawn(process.execPath, [...pre, KIT, ...args], { cwd: ROOT, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let idle = null;
-    const push = s => { for (const l of clean(s).split(/\r?\n/)) j.lines.push(l); if (j.lines.length > 4000) j.lines.splice(0, j.lines.length - 4000); };
+    const push = s => { for (const l of uiText(clean(s)).split(/\r?\n/)) j.lines.push(l); if (j.lines.length > 4000) j.lines.splice(0, j.lines.length - 4000); };
     const onData = b => { j.question = null; const t = j.partial + b.toString('utf8'); const parts = t.split('\n'); j.partial = parts.pop(); if (parts.length) push(parts.join('\n'));
       clearTimeout(idle); if (j.partial.trim()) idle = setTimeout(() => ask(j.partial), 350); };
     const ask = q => { if (!j.running) return; const qq = q.trim(); const auto = j.answers.find(x => x.re.test(qq));

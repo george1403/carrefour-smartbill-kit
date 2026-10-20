@@ -118,7 +118,7 @@ async function alreadyIssued(page, profile, order, cf) {
     if (e && (e.status === 'pending' || e.status === 'unknown')) return { kind: 'unclear', text: `Comanda ${order.orderNo}: o salvare anterioara in SmartBill s-a intrerupt sau e neclara (${f}, stare ${e.status}). Verifica in SmartBill (Facturi si Ciorne) daca exista deja factura/ciorna; nu continui automat.` };
     if (e && e.status !== 'pending' && e.status !== 'unknown') return f === 'issued.json'
       ? { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata: factura ${e.number || 'id ' + e.invoiceId}. Nu o mai completez.` }
-      : { kind: 'draft', draftId: e.invoiceId ? String(e.invoiceId) : null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Ciorne.` };
+      : { kind: 'draft', draftId: e.invoiceId ? String(e.invoiceId) : null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` };
   }
   const rows = await readInvoiceReport(page, profile, cf, order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30));
   const net = Math.round(order.lines.reduce((t, l) => t + Number(l.qty) * Number(l.price), 0) * 100) / 100;
@@ -126,7 +126,7 @@ async function alreadyIssued(page, profile, order, cf) {
     for (const [k, e] of Object.entries(L)) if (String(k).replace(/^0+/, '') !== String(order.orderNo).replace(/^0+/, '') && e && e.invoiceId) others.push(String(e.invoiceId)); }
   const c = classify(rows, order.orderNo, profile.cfg.smartbill?.series, net, others); if (!c) return null;
   if (c.kind === 'issued') return { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata in SmartBill: factura ${c.number || c.row.slice(0, 120)}. Nu o mai completez.` };
-  if (c.kind === 'draft') return { kind: 'draft', draftId: c.draftId || null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill${c.draftId ? ' (id ' + c.draftId + ', acelasi total)' : ''}. Emite-o sau sterge-o din SmartBill > Ciorne.` };
+  if (c.kind === 'draft') return { kind: 'draft', draftId: c.draftId || null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill${c.draftId ? ' (id ' + c.draftId + ', acelasi total)' : ''}. Emite-o sau sterge-o din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.` };
   return { kind: 'cancelled', text: `Factura ${c.number || ''} pentru comanda ${order.orderNo} a fost ANULATA in SmartBill; nu o refac automat (decide tu).` };
 }
 
@@ -405,7 +405,7 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
   log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Ciorne (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {
@@ -423,7 +423,7 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
     // automat: no XML, or SmartBill reports e-Factura validation errors -> do not finalize (a final invoice cannot be edited)
     if (!pv.xml || (Array.isArray(pv.xmlErrors) ? pv.xmlErrors.length : pv.xmlErrors)) {
       rec.status = 'draft-stopped'; rec.needsHuman = true; L[order.orderNo] = rec; save();
-      throw kerr('NEEDS_HUMAN', `STOP: nu am putut verifica XML-ul ciornei ${rec.invoiceId} (${pv.xml ? 'erori e-Factura: ' + JSON.stringify(pv.xmlErrors).slice(0, 200) : rec.draftXml}). Ciorna ramane nefinalizata in SmartBill > Ciorne.`);
+      throw kerr('NEEDS_HUMAN', `STOP: nu am putut verifica XML-ul ciornei ${rec.invoiceId} (${pv.xml ? 'erori e-Factura: ' + JSON.stringify(pv.xmlErrors).slice(0, 200) : rec.draftXml}). Ciorna ramane nefinalizata in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.`);
     }
     // race: another run / a person may have issued this order meanwhile -> re-read the report just before the final save
     const again = classify(await D.readReport(page, profile, JSON.parse(fs.readFileSync(path.join(profile.root, 'data', 'carrefour.json'), 'utf8')), order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30)), order.orderNo, profile.cfg.smartbill?.series, null);

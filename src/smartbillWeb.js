@@ -108,7 +108,7 @@ async function openSession({ profile, headless = true, log = console.log }) {
 
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
   if (await isLoginPage(page)) {
-    if (!profile.secrets.email || !profile.secrets.password) throw new Error('Lipsesc din .env: SMARTBILL_EMAIL / SMARTBILL_PASSWORD (alege 6 - Configurare - din meniu)');
+    if (!profile.secrets.email || !profile.secrets.password) throw Object.assign(new Error('Lipsesc emailul sau parola SmartBill din configurare. Alege 6 (Configurare) si scrie-le din nou.'), { code: 'CONFIG' });
     await dismissCookies(page);
     await page.locator('#id_username, input[name="username"]').first().fill(profile.secrets.email);
     await page.locator('#id_password, input[name="password"]').first().fill(profile.secrets.password);

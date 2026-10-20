@@ -48,8 +48,8 @@ $npx = Join-Path (Split-Path -Parent $node) 'npx.cmd'; if (-not (Test-Path -Lite
 Write-Host "Node.js: $(& $node -v)"
 
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $Rt 'browsers'
-Write-Host "Instalez bibliotecile (npm ci)..."
-& $npm ci --no-audit --no-fund --loglevel=error; if ($LASTEXITCODE -ne 0) { Fail "npm ci a esuat." }
+Write-Host "Instalez bibliotecile programului..."
+& $npm ci --no-audit --no-fund --loglevel=error; if ($LASTEXITCODE -ne 0) { Fail "Nu pot instala bibliotecile programului." }
 Write-Host "Instalez browserul Chromium (o singura data, ~150 MB)..."
 & $npx --no-install playwright install chromium; if ($LASTEXITCODE -ne 0) { Fail "Nu pot descarca browserul Chromium." }
 & $node (Join-Path $Kit 'bin\kit.js') selftest; if ($LASTEXITCODE -ne 0) { Fail "Testul de verificare a esuat." }

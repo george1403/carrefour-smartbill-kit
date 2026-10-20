@@ -128,7 +128,7 @@ function reportText(r) {
   if (r.skipped.length) { L.push('Sarite:'); r.skipped.forEach(x => L.push(`  ${x.orderNo}: ${x.why}`)); }
   if (r.errors.length) { L.push('Erori:'); r.errors.forEach(x => L.push(`  ${x.orderNo || '-'}: ${x.error}`)); }
   if (r.remaining && r.remaining.length) L.push(`Neprocesate (${r.cancelled ? 'neconfirmat' : 'oprit'}): ${r.remaining.join(', ')}`);
-  if (r.created.length) L.push('Ciornele sunt in SmartBill > Ciorne: verifica-le si emite-le tu. Programul NU a emis nicio factura.');
+  if (r.created.length) L.push('Ciornele sunt in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna: verifica-le si emite-le tu. Programul NU a emis nicio factura.');
   return L.join('\n');
 }
 module.exports = { run, bulkPlan, previewText, reportText };

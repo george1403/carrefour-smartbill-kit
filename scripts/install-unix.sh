@@ -47,8 +47,8 @@ fi
 say "Node.js: $(node -v)  npm: $(npm -v)"
 
 export PLAYWRIGHT_BROWSERS_PATH="$RT/browsers"
-say "Instalez bibliotecile (npm ci)..."
-npm ci --no-audit --no-fund --loglevel=error || fail "npm ci a esuat."
+say "Instalez bibliotecile programului..."
+npm ci --no-audit --no-fund --loglevel=error || fail "Nu pot instala bibliotecile programului."
 say "Instalez browserul Chromium (o singura data, ~150 MB)..."
 npx --no-install playwright install chromium || fail "Nu pot descarca browserul Chromium."
 if [ "$PLAT" = linux ]; then
