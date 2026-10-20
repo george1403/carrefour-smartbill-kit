@@ -13,6 +13,7 @@ const ITEMS = [
   ['6', 'Configurare (conturi, serie, mod de lucru)', () => ['setup']],
   ['7', 'Verificare instalare', () => ['selftest']],
   ['8', 'Actualizare: preia conturile si setarile din kitul vechi', () => ['import-config']],
+  ['9', 'Ciorne in bloc: TOATE comenzile nefacturate din portal (lista + confirmare "da"; NU emite facturi)', () => ['bulk-ciorne']],
 ];
 async function run() {
   // line queue: works on a terminal and with piped answers (lines typed ahead are not lost)

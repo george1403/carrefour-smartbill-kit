@@ -28,7 +28,19 @@ Poti cere sa verifice singur comenzile **la fiecare ora** (raspunde *da*). Comen
 Pe factura, fiecare linie are **exact denumirea din comanda Carrefour** si unitatea ceruta de Carrefour.
 
 ## 5. Meniul (dublu-click pe run.bat / run.command)
-1 Vezi comenzile · 2 Fa CIORNA · 3 Previzualizare (nu salveaza nimic) · 4 Verificare automata acum · **5 Autentificare Carrefour (CAPTCHA)** · 6 Configurare · 7 Verificare instalare · 8 Actualizare (preia setarile din kitul vechi)
+1 Vezi comenzile · 2 Fa CIORNA · 3 Previzualizare (nu salveaza nimic) · 4 Verificare automata acum · **5 Autentificare Carrefour (CAPTCHA)** · 6 Configurare · 7 Verificare instalare · 8 Actualizare (preia setarile din kitul vechi) · **9 Ciorne in bloc** (toate comenzile nefacturate)
+
+### Optiunea 9 — Ciorne in bloc (toate comenzile nefacturate)
+Face **ciorne** pentru **TOATE** comenzile din portalul Carrefour care nu sunt inca facturate, **oricat de vechi** (nu tine cont de data instalarii sau de limita de 14 zile).
+
+1. Programul citeste portalul si iti arata **lista**: cate comenzi, totalul fara TVA, plus cele care **au deja ciorna** („are deja ciorna (id X)” — nu se fac a doua oara) si cele **sarite** (deja facturate la Carrefour, in jurnalul facturilor emise sau in SmartBill, anulate/respinse, sau care asteapta verificarea ta), fiecare cu motivul.
+2. Scrie **da** ca sa continue (orice alt raspuns = nu se creeaza nimic).
+3. Le face pe toate, singur, **in loturi de cate 10**. Inainte de fiecare ciorna verifica din nou in SmartBill sa nu existe deja factura sau ciorna; verifica si XML-ul ciornei.
+4. La final: **raport** cu ciornele create, cele care aveau deja ciorna, cele sarite si erorile (si in `out/<firma>/bulk-ciorne-ultimul-raport.json`).
+
+Face **numai ciorne**, chiar daca ai ales modul *automat*: **nu emite nicio factura**. Tu le verifici si le emiti din SmartBill > Ciorne.
+Din linia de comanda: `node bin/kit.js bulk-ciorne --check` (doar lista, nu creeaza nimic) si `node bin/kit.js bulk-ciorne` (lista + confirmare „da” + ciorne). Optional `--lot=10`.
+Daca portalul cere CAPTCHA, se opreste si iti spune sa alegi **5**; o rulare oprita se poate relua oricand — ce e deja facut nu se dubleaza.
 
 ## 6. Codul CAPTCHA si sesiunea Carrefour
 Programul tine minte autentificarea. Cand portalul cere din nou codul (sesiunea a expirat sau Carrefour a pus un cod mai greu):

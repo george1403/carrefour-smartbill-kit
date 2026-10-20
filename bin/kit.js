@@ -22,6 +22,9 @@ const HELP = `Comenzi:
   import-config [DIR]   copiaza .env + profilul + jurnalele dintr-un kit vechi (actualizare fara pierderi)
   auto                  comenzile noi din portal -> ciorne (sau facturi, daca in setup ai ales 'automat')
                         --check = doar arata ce ar face; --draft-only = forteaza ciorne; --watch --every=60 = repeta
+  bulk-ciorne           (meniu 9) CIORNE IN BLOC: TOATE comenzile nefacturate din portal (fara limita de data) -> ciorne,
+                        in loturi; arata lista + total si cere "da"; NU emite niciodata (nici in mod automat)
+                        --check = doar lista, nu creeaza nimic; --lot=10 = marimea lotului
   schedule              porneste 'auto' singur la fiecare ora (--every=MIN, --remove = opreste)
   recon                 (tehnic) poze + inventar campuri din SmartBill
 Optiuni: --profile=NUME
@@ -58,6 +61,7 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
   if (cmd === 'auto') { const a = require('../src/auto'); const o = { check: flag('check'), mode: flag('draft-only') ? 'ciorne' : undefined };
     if (flag('watch')) { const r = await a.watch(profile, { ...o, every: Number(opt('every') || 60) }); process.exitCode = r.exit || 0; return; }
     const r = await a.runOnce(profile, o); process.exitCode = r.exit != null ? r.exit : (r.errors?.length ? 1 : 0); return; }
+  if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10) }); process.exitCode = r.exit || 0; return; }
   if (cmd === 'schedule') return console.log(flag('remove') ? require('../src/schedule').remove() : require('../src/schedule').install({ every: Number(opt('every') || 60), profile: opt('profile') }));
   if (cmd === 'orders') return void await require('../src/orders').list(profile);
   if (cmd === 'fill' || cmd === 'ciorna' || cmd === 'preview') {

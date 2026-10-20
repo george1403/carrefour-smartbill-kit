@@ -17,7 +17,7 @@ function start(opts = {}) {
 <form id="_58_fm" method="post" action="/c/portal/login?p_p_id=58"><input id="_58_login" name="u"><input id="_58_password" name="p" type="password"><input type="hidden" id="hc" name="hc" value="">${cap}<button type="submit">Autentificare</button></form>${human}</body></html>`;
   };
   const docsPage = () => `<html><head><title>Documente</title><script>Liferay={ThemeDisplay:{isSignedIn:()=>true}};EC={Url:{goTo:(u,p,o,t)=>window.open('/detail?id='+o.id)}};
-var jsonModel = ${JSON.stringify({ data: [{ id: 11, nrComMeti: '1780308', magazin: 'CARREFOUR BRASOV', codGLN: '5940475006037', furnizor: st.supplierName, codFurnizor: st.supplier, dataCom: '19.10.2026', totalFaraTvaML: 120.36, stare: 'Noua' }] })};</script></head><body><a href="/c/portal/logout">Iesire</a></body></html>`;
+var jsonModel = ${JSON.stringify({ data: (st.orders || [{ id: 11, nrComMeti: '1780308', magazin: 'CARREFOUR BRASOV', codGLN: '5940475006037', dataCom: '19.10.2026', totalFaraTvaML: 120.36, stare: 'Noua' }]).map(o => ({ furnizor: st.supplierName, codFurnizor: st.supplier, ...o })) })};</script></head><body><a href="/c/portal/logout">Iesire</a></body></html>`;
   const detail = () => `<html><head><script>Liferay={ThemeDisplay:{isSignedIn:()=>true}};var jsonModel = ${JSON.stringify({ data: { linii: [{ codEAN: '5940000000017', codArticol: 90000001, articol: 'PRODUS TEST 50G', cant: 6, um: 'PCE', pret: 20.06, cotaTva: 11 }] } })};</script></head><body>detaliu</body></html>`;
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x'); const send = (code, body, h = {}) => { res.writeHead(code, { 'content-type': 'text/html', ...h }); res.end(body); };

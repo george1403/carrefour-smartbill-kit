@@ -108,7 +108,7 @@ function classify(rows, orderNo, series, netTotal = null, excludeDraftIds = []) 
   const num = r => { const m = r.match(new RegExp(`\\b${String(series || '[A-Z]+').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:nr\\.?\\s*)?(\\d{1,10})\\b`)); return m ? `${series || ''} ${m[1]}`.trim() : null; };
   const ann = hits.filter(r => /"is_annulled": ?true/.test(r)); const dr = hits.filter(r => /"is_draft": ?true/.test(r)); const live = hits.filter(r => !ann.includes(r) && !dr.includes(r));
   if (live.length) return { kind: 'issued', number: num(live[0]), row: live[0] };
-  if (dr.length) return { kind: 'draft', row: dr[0] };
+  if (dr.length) return { kind: 'draft', row: dr[0], draftId: String(dr[0].split(' | ')[0]).trim() || null };
   return { kind: 'cancelled', number: num(ann[0]), row: ann[0] };
 }
 async function alreadyIssued(page, profile, order, cf) {
@@ -117,7 +117,7 @@ async function alreadyIssued(page, profile, order, cf) {
     const nzk = k => String(k).replace(/^0+/, ''); const k = Object.keys(L).find(x => nzk(x) === nzk(order.orderNo)); const e = k && L[k];
     if (e && e.status !== 'pending' && e.status !== 'unknown') return f === 'issued.json'
       ? { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata: factura ${e.number || 'id ' + e.invoiceId}. Nu o mai completez.` }
-      : { kind: 'draft', text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Ciorne.` };
+      : { kind: 'draft', draftId: e.invoiceId ? String(e.invoiceId) : null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill (id ${e.invoiceId}). Emite-o sau sterge-o din SmartBill > Ciorne.` };
   }
   const rows = await readInvoiceReport(page, profile, cf, order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30));
   const net = Math.round(order.lines.reduce((t, l) => t + Number(l.qty) * Number(l.price), 0) * 100) / 100;
@@ -125,7 +125,7 @@ async function alreadyIssued(page, profile, order, cf) {
     for (const [k, e] of Object.entries(L)) if (String(k).replace(/^0+/, '') !== String(order.orderNo).replace(/^0+/, '') && e && e.invoiceId) others.push(String(e.invoiceId)); }
   const c = classify(rows, order.orderNo, profile.cfg.smartbill?.series, net, others); if (!c) return null;
   if (c.kind === 'issued') return { kind: 'issued', text: `Comanda ${order.orderNo} este deja facturata in SmartBill: factura ${c.number || c.row.slice(0, 120)}. Nu o mai completez.` };
-  if (c.kind === 'draft') return { kind: 'draft', text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill${c.draftId ? ' (id ' + c.draftId + ', acelasi total)' : ''}. Emite-o sau sterge-o din SmartBill > Ciorne.` };
+  if (c.kind === 'draft') return { kind: 'draft', draftId: c.draftId || null, text: `Pentru comanda ${order.orderNo} exista deja o ciorna in SmartBill${c.draftId ? ' (id ' + c.draftId + ', acelasi total)' : ''}. Emite-o sau sterge-o din SmartBill > Ciorne.` };
   return { kind: 'cancelled', text: `Factura ${c.number || ''} pentru comanda ${order.orderNo} a fost ANULATA in SmartBill; nu o refac automat (decide tu).` };
 }
 
@@ -171,7 +171,7 @@ async function run(profile, opts = {}) {
   const page = s.page; page.__guard = s.guard; const shot = async n => { const f = path.join(out, `${n}.png`); await page.screenshot({ path: f, fullPage: true }); return f; };
   const result = { out, plan: path.join(out, 'plan.json'), mode: issue ? 'issue' : 'fill-only' };
   try {
-    { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: 'DUPLICATE', kind: dup.kind }); }
+    { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
     await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
 
     // header
