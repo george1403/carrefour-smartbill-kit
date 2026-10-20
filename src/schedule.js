@@ -56,9 +56,11 @@ const sh = (c, a, o = {}) => execFileSync(c, a, { encoding: 'utf8', stdio: ['pip
 
 /** macOS privacy protection (TCC): a background job (launchd) is NOT allowed to read Desktop, Documents, Downloads, iCloud/OneDrive
  *  folders or external disks ("Operation not permitted"; tested on macOS 2026-10-20). The hourly check would silently never run. */
-function macProtected(root = ROOT, home = os.homedir()) {
-  const r = path.resolve(root) + '/'; const h = path.resolve(home);
-  return ['Desktop', 'Documents', 'Downloads', 'Library/Mobile Documents', 'Library/CloudStorage', 'Pictures', 'Movies', 'Music'].some(d => r.startsWith(path.join(h, d) + '/')) || /^\/Volumes\//.test(r);
+// checks both $HOME and the account's real home (HOME may be overridden; TCC protects the real one)
+function macProtected(root = ROOT, home = null) {
+  const r = path.resolve(root) + '/'; let real = null; try { real = os.userInfo().homedir; } catch {}
+  const homes = home ? [home] : [...new Set([os.homedir(), real].filter(Boolean))];
+  return homes.some(h => ['Desktop', 'Documents', 'Downloads', 'Library/Mobile Documents', 'Library/CloudStorage', 'Pictures', 'Movies', 'Music'].some(d => r.startsWith(path.join(path.resolve(h), d) + '/'))) || /^\/Volumes\//.test(r);
 }
 const MAC_MOVE_MSG = () => `Pe Mac, verificarea automata NU poate rula cand programul e in Desktop, Documente, Descarcari sau iCloud (macOS o blocheaza fara niciun mesaj). Programul este acum in: ${ROOT}. Mutati folderul programului in folderul personal (in Finder: meniul Mergi > Acasa), dati dublu-click pe install.command din locul nou, apoi porniti din nou Verificarea automata.`;
 function install({ every = 60, profile = null, dryRun = false } = {}) {

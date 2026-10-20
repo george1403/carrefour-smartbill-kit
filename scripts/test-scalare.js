@@ -172,6 +172,21 @@ const { wf, readLedger } = require('../src/fsx');
     fs.copyFileSync(path.join(ROOT, 'scripts', 'mac-ui-launch.sh'), path.join(kit, 'scripts', 'mac-ui-launch.sh')); fs.copyFileSync(path.join(ROOT, 'run.sh'), path.join(kit, 'run.sh')); fs.copyFileSync(path.join(ROOT, 'scripts', 'env-unix.sh'), path.join(kit, 'scripts', 'env-unix.sh'));
     const dlg = path.join(tmp, 'dialog.txt'); const r = spawnSync('/bin/bash', [path.join(kit, 'scripts', 'mac-ui-launch.sh')], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: tmp, KIT_TEST_DIALOG: dlg } });
     assert(r.status === 9 && /install\.command/.test(fs.readFileSync(dlg, 'utf8')), r.status + ' ' + r.stderr); return 'cod 9 + mesaj: ' + fs.readFileSync(dlg, 'utf8').slice(0, 70); });
+  await T('C31', 'Mac launchd/Finder: PATH minim -> gaseste Node-ul folosit la instalare (.runtime/node-dir), nu cod 9', async () => {
+    if (process.platform === 'win32') return 'sarit pe Windows';
+    const kit = path.join(tmp, 'kit path minim'); fs.mkdirSync(path.join(kit, 'scripts'), { recursive: true }); fs.mkdirSync(path.join(kit, '.runtime'), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, 'scripts', 'env-unix.sh'), path.join(kit, 'scripts', 'env-unix.sh'));
+    const nd = path.join(tmp, 'node ascuns', 'bin'); fs.mkdirSync(nd, { recursive: true }); fs.writeFileSync(path.join(nd, 'node'), '#!/bin/sh\necho stub\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(kit, '.runtime', 'node-dir'), nd + '\n');
+    const sb = path.join(tmp, 'bin minim'); fs.mkdirSync(sb, { recursive: true });   // like launchd: basic tools only, no node
+    for (const t of ['dirname', 'sort', 'tail', 'ls', 'cat']) { const w = spawnSync('/bin/sh', ['-c', 'command -v ' + t], { encoding: 'utf8' }).stdout.trim(); if (w && !fs.existsSync(path.join(sb, t))) fs.symlinkSync(w, path.join(sb, t)); }
+    const r = spawnSync('/bin/bash', ['-c', 'source "$1/scripts/env-unix.sh"; command -v node', '_', kit], { encoding: 'utf8', env: { PATH: sb, HOME: path.join(tmp, 'acasa-goala') } });
+    assert(r.stdout.trim() === path.join(nd, 'node'), JSON.stringify(r.stdout + r.stderr)); return 'gasit: ' + r.stdout.trim().slice(-30); });
+  await T('C32', 'Instalare Mac: disc plin / folder read-only -> mesaj clar, FARA sfatul gresit "verifica internetul"', () => {
+    const s = fs.readFileSync(path.join(ROOT, 'scripts', 'install-unix.sh'), 'utf8'); const pf = path.join(ROOT, 'install.ps1'); const p = fs.existsSync(pf) ? fs.readFileSync(pf, 'utf8') : null;
+    assert(/LOCAL_ERR=1 fail "Nu pot scrie/.test(s) && /LOCAL_ERR=1 fail "Pe disc/.test(s) && /NEED_KB=300000/.test(s), 'unix');
+    const r = spawnSync('/bin/bash', ['-c', 'say(){ echo "$*"; }; ' + s.match(/fail\(\) \{[\s\S]*?\n\}/)[0] + '; LOCAL_ERR=1 fail "disc"'], { encoding: 'utf8' });
+    assert(/EROARE: disc/.test(r.stdout) && !/internet/.test(r.stdout), r.stdout); if (p) assert(/-Local \}/.test(p) && /if \(-not \$Local\)/.test(p), 'ps1'); return 'fara sfat de internet'; });
   fi.run = realRun;
 
   const ok = results.filter(r => r.ok).length; console.log(`\n${ok}/${results.length} teste scalare trecute.`);

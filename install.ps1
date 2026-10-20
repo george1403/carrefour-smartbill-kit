@@ -1,4 +1,4 @@
-# Windows: instalare fara drepturi de administrator. Pornit de install.bat (ExecutionPolicy Bypass doar pentru acest proces).
+﻿# Windows: instalare fara drepturi de administrator. Pornit de install.bat (ExecutionPolicy Bypass doar pentru acest proces).
 # Node.js portabil in .runtime\ (daca lipseste/e vechi), biblioteci (npm ci), browser Chromium in .runtime\browsers. Idempotent.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -10,9 +10,9 @@ $Kit = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $Kit
 $NodeVersion = (Get-Content -LiteralPath (Join-Path $Kit '.node-version') -Raw).Trim()
 $Rt = Join-Path $Kit '.runtime'
-function Fail($m) {
+function Fail($m, [switch]$Local) {
   Write-Host ""; Write-Host "EROARE: $m" -ForegroundColor Red
-  Write-Host "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.bat."
+  if (-not $Local) { Write-Host "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.bat." }
   Write-Host "Daca tot nu merge, fa o poza acestei ferestre si trimite-o lui George (WhatsApp/email)."
   exit 1
 }
@@ -21,9 +21,9 @@ function Dl($url, $out) { for ($i = 1; $i -le 3; $i++) { try { Invoke-WebRequest
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
 Write-Host "== Instalare Carrefour -> SmartBill (win-$arch) in: $Kit"
 # common traps, checked before downloading anything (plain Romanian, nothing changed yet)
-if ($Kit -match '\\AppData\\Local\\Temp\\' -and $Kit -match '(\.zip|Temp\d+_)') { Fail "Ati pornit install.bat direct din ZIP, fara sa-l dezarhivati. Inchideti fereastra, click dreapta pe ZIP > Extrage tot > Extragere, apoi dublu-click pe install.bat din folderul extras." }
-try { $probe = Join-Path $Kit ('.scriere-test-' + $PID); [IO.File]::WriteAllText($probe, 'ok'); Remove-Item -LiteralPath $probe -Force } catch { Fail "Nu pot scrie in folderul programului ($Kit). Mutati folderul in Documente (sau pe Desktop) si porniti din nou install.bat." }
-try { $free = (Get-PSDrive -Name ($Kit.Substring(0,1))).Free; if ($free -and $free -lt 1GB) { Fail ("Pe disc mai sunt doar {0:N0} MB liberi; programul are nevoie de aproximativ 1 GB. Eliberati spatiu, apoi porniti din nou install.bat." -f ($free / 1MB)) } } catch {}
+if ($Kit -match '\\AppData\\Local\\Temp\\' -and $Kit -match '(\.zip|Temp\d+_)') { Fail "Ati pornit install.bat direct din ZIP, fara sa-l dezarhivati. Inchideti fereastra, click dreapta pe ZIP > Extrage tot > Extragere, apoi dublu-click pe install.bat din folderul extras." -Local }
+try { $probe = Join-Path $Kit ('.scriere-test-' + $PID); [IO.File]::WriteAllText($probe, 'ok'); Remove-Item -LiteralPath $probe -Force } catch { Fail "Nu pot scrie in folderul programului ($Kit). Mutati folderul in Documente (sau pe Desktop) si porniti din nou install.bat." -Local }
+try { $free = (Get-PSDrive -Name ($Kit.Substring(0,1))).Free; if ($free -and $free -lt 1GB) { Fail ("Pe disc mai sunt doar {0:N0} MB liberi; programul are nevoie de aproximativ 1 GB. Eliberati spatiu, apoi porniti din nou install.bat." -f ($free / 1MB)) -Local } } catch {}
 foreach ($od in @($env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) { if ($od -and $Kit.ToLower().StartsWith($od.ToLower())) { Write-Host "ATENTIE: folderul programului este in OneDrive ($od). OneDrive poate bloca sau dubla fisierele programului (jurnalele facturilor). Recomandat: mutati folderul in C:\Users\$env:USERNAME\ (in afara OneDrive) si porniti din nou install.bat." -ForegroundColor Yellow; break } }
 
 $useSystem = $false

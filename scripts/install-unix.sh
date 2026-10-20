@@ -10,7 +10,7 @@ RT="$KIT_DIR/.runtime"
 say() { printf '%s\n' "$*"; }
 fail() {
   say ""; say "EROARE: $*"
-  say "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.command."
+  [ "${LOCAL_ERR:-0}" = 1 ] || say "Verifica legatura la internet. Daca firma foloseste proxy, cere ajutor persoanei tehnice a firmei, apoi da din nou dublu-click pe install.command."
   say "Daca tot nu merge, fa o poza acestei ferestre si trimite-o lui George (WhatsApp/email)."
   exit 1
 }
@@ -24,9 +24,10 @@ command -v curl >/dev/null || fail "Lipseste programul curl."
 [ "$PLAT" = darwin ] && xattr -dr com.apple.quarantine "$KIT_DIR" 2>/dev/null || true
 say "== Instalare Carrefour -> SmartBill ($PLAT-$ARCH) in: $KIT_DIR"
 # common traps, checked before downloading anything
-( : > "$KIT_DIR/.scriere-test-$$" ) 2>/dev/null && rm -f "$KIT_DIR/.scriere-test-$$" || fail "Nu pot scrie in folderul programului ($KIT_DIR). Mutati folderul in Documente si porniti din nou install.command."
+( : > "$KIT_DIR/.scriere-test-$$" ) 2>/dev/null && rm -f "$KIT_DIR/.scriere-test-$$" || LOCAL_ERR=1 fail "Nu pot scrie in folderul programului ($KIT_DIR). Mutati folderul in folderul personal (Finder: Mergi > Acasa) si porniti din nou install.command."
 FREE_KB="$(df -Pk "$KIT_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
-if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt 1000000 ] 2>/dev/null; then fail "Pe disc mai sunt doar $((FREE_KB/1024)) MB liberi; programul are nevoie de aproximativ 1 GB. Eliberati spatiu, apoi porniti din nou install.command."; fi
+NEED_KB=1000000; ls -d "$KIT_DIR"/.runtime/browsers/chromium* >/dev/null 2>&1 && NEED_KB=300000   # reinstall: browser already downloaded
+if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt "$NEED_KB" ] 2>/dev/null; then LOCAL_ERR=1 fail "Pe disc mai sunt doar $((FREE_KB/1024)) MB liberi; programul are nevoie de aproximativ $((NEED_KB/1000)) MB. Eliberati spatiu, apoi porniti din nou install.command."; fi
 case "$KIT_DIR" in *"/Library/Mobile Documents/"*|*"/Library/CloudStorage/"*) say "ATENTIE: folderul programului este intr-un folder sincronizat (iCloud/OneDrive/Google Drive). Sincronizarea poate bloca sau dubla jurnalele facturilor. Recomandat: mutati folderul in folderul personal (Acasa) si porniti din nou install.command." ;; esac
 USE_SYSTEM=0
 if [ "${KIT_FORCE_PORTABLE_NODE:-0}" != 1 ] && command -v node >/dev/null 2>&1; then
@@ -49,6 +50,7 @@ if [ "$USE_SYSTEM" = 0 ]; then
   fi
   export PATH="$ND/bin:$PATH"
 fi
+mkdir -p "$RT" && dirname "$(command -v node)" > "$RT/node-dir"  # remembered for launchd / Finder (minimal PATH)
 say "Node.js: $(node -v)  npm: $(npm -v)"
 
 export PLAYWRIGHT_BROWSERS_PATH="$RT/browsers"
