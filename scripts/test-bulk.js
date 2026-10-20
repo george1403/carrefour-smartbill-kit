@@ -1,4 +1,5 @@
 'use strict';
+const { rm: rmx } = require('../src/fsx'); // verified delete (Node 24 Windows: fs.rmSync is a no-op on non-ASCII paths)
 /**
  * Offline tests of "ciorne in bloc" (bulk-ciorne). Carrefour = LOCAL mock portal (scripts/mock-portal.js, real browser login + OCR CAPTCHA);
  * SmartBill = test hooks (fillInvoice._deps mocks + a fake fillInvoice.run that applies the real duplicate classifier to a fake report).
@@ -72,6 +73,18 @@ async function T(id, name, fn) { let ok = false, ev = ''; try { ev = String(awai
       const h = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'kit.js'), 'help'], { encoding: 'utf8' }); assert(/bulk-ciorne/.test(h.stdout) && /--check/.test(h.stdout)); return '9) ' + m[1].slice(0, 60); });
     await T('K12', 'Lista goala (toate facturate) -> "Nimic de facut", fara confirmare, 0 ciorne', async () => { const keep = mock.st.orders; mock.st.orders = [O(1700004, '01.02.2026', 70, { listaNrFact: 'DEL 12' })];
       try { const p = prof(); calls = []; const r = await bulk.run(p, { confirm: async () => { throw new Error('a cerut confirmare'); }, log: () => {} }); assert(calls.length === 0 && r.created.length === 0 && r.exit === 0); return '0 de facut, exit 0'; } finally { mock.st.orders = keep; } });
+    await T('K13', 'Meniu 9 cu stdin deschis (terminal): raspuns "nu" -> raport si procesul SE TERMINA (fara readline/OCR agatat)', async () => {
+      mock.st.orders = [O(1700101, '05.01.2025', 100)]; const d = path.join(tmp, 'k13'); fs.mkdirSync(d, { recursive: true }); const js = path.join(d, 'child.js');
+      fs.writeFileSync(js, `const path=require('path');const ROOT=${JSON.stringify(ROOT)};const d=${JSON.stringify(d)};
+const p={name:'test',root:ROOT,secrets:{carrefourUser:'u',carrefourPassword:'p'},cfg:{orderSource:{type:'carrefour-portal'},company:{name:'FIRMA MEA TEST SRL'},carrefour:{expectedSupplierCode:'10001'},smartbill:{series:'TST'},auto:{mode:'ciorne'}},dirs:{state:path.join(d,'state'),out:path.join(d,'out','test')}};
+require(path.join(ROOT,'src','bulk')).run(p,{}).then(r=>{console.log('RETURNED '+!!r.cancelled);process.exitCode=r.exit||0;});`);
+      const child = require('child_process').spawn(process.execPath, [js], { env: { ...process.env, KIT_INTERACTIVE: '1', KIT_UNATTENDED: '', KIT_BULK_CONFIRM: '' }, stdio: ['pipe', 'pipe', 'pipe'] });
+      let out = ''; child.stdout.on('data', b => { out += b; }); child.stderr.on('data', b => { out += b; });
+      child.stdin.write('nu\n'); // stdin stays OPEN, like a terminal
+      const code = await new Promise(r => { const t = setTimeout(() => { child.kill(); r('HANG'); }, 45000); child.on('exit', c => { clearTimeout(t); r(c); }); });
+      child.stdin.destroy();
+      assert(/RETURNED true/.test(out), 'nu a ajuns la raport: ' + out.slice(-800)); assert(code === 0, 'procesul nu s-a terminat dupa raport (' + code + ')');
+      return 'raport + iesire cod 0'; });
   } finally { fi.run = realRun; await mock.close(); }
-  const bad = results.filter(r => !r.ok).length; console.log(`\n${results.length - bad}/${results.length} teste ciorne-in-bloc trecute.`); fs.rmSync(tmp, { recursive: true, force: true }); process.exit(bad ? 1 : 0);
+  const bad = results.filter(r => !r.ok).length; console.log(`\n${results.length - bad}/${results.length} teste ciorne-in-bloc trecute.`); rmx(tmp); process.exit(bad ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

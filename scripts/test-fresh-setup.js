@@ -1,4 +1,5 @@
 'use strict';
+const { rm: rmx } = require('../src/fsx'); // verified delete (Node 24 Windows: fs.rmSync is a no-op on non-ASCII paths)
 /**
  * Test: setup from a FRESH extraction of the kit (as from the ZIP), with no profiles/, out/ or ~/.config folders.
  * Network steps (SmartBill, Carrefour portal, SmartBill preparation) are mocked; fake accounts only.
@@ -11,7 +12,7 @@ function run() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kit fresh ă-')); const kit = path.join(tmp, 'carrefour-smartbill-kit'); const home = path.join(tmp, 'home');
   const files = require('../src/selftest').shippedFiles();
   for (const f of files) { const d = path.join(kit, f); fs.mkdirSync(path.dirname(d), { recursive: true }); fs.copyFileSync(path.join(SRC, f), d); }
-  fs.rmSync(path.join(kit, 'profiles'), { recursive: true, force: true }); fs.rmSync(path.join(kit, 'out'), { recursive: true, force: true });
+  rmx(path.join(kit, 'profiles')); rmx(path.join(kit, 'out'));
   fs.symlinkSync(path.join(SRC, 'node_modules'), path.join(kit, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   fs.mkdirSync(home);
   const mock = path.join(tmp, 'mock.json');
@@ -34,7 +35,7 @@ function run() {
     const envBefore = fs.readFileSync(path.join(kit, '.env'), 'utf8');
     // run 2 (resume): interrupted setup left progress; reuse saved accounts, keep earlier choices by pressing Enter
     fs.writeFileSync(path.join(kit, 'out', '.setup-progress.json'), JSON.stringify({ series: 'TSTA', mode: 'automat' }));
-    fs.rmSync(path.join(kit, 'profiles'), { recursive: true, force: true });
+    rmx(path.join(kit, 'profiles'));
     r = setup('da\n\nda\n\nnu\n');
     if (r.status !== 0 || !fs.existsSync(pf)) fail('run 2: reluarea nu a creat profilul', r);
     p = JSON.parse(fs.readFileSync(pf, 'utf8'));
@@ -46,11 +47,11 @@ function run() {
     r = setup('da\n1\nnu\n');
     if (r.status !== 12 || fs.readFileSync(pf, 'utf8') !== '{"keep":1}') fail('run 3: contul altui furnizor nu a fost refuzat', r);
     // run 4: several series and no answer -> no silent default
-    fs.rmSync(path.join(kit, 'out', '.setup-progress.json'), { force: true });
+    rmx(path.join(kit, 'out', '.setup-progress.json'));
     r = setup('da\n');
     if (r.status !== 10) fail('run 4: seria a fost aleasa fara raspuns', r);
     return 'setup din ZIP proaspat (fara profiles/ si out/) + reluare + serie invalida/lipsa + cont Carrefour strain refuzat: OK';
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  } finally { try { fs.unlinkSync(path.join(kit, 'node_modules')); } catch { try { fs.rmdirSync(path.join(kit, 'node_modules')); } catch {} } rmx(tmp); }
 }
 module.exports = { run };
 if (require.main === module) { try { console.log('OK   ' + run()); } catch (e) { console.error('FAIL ' + e.message); process.exit(1); } }

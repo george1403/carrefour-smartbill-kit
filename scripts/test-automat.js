@@ -1,4 +1,5 @@
 'use strict';
+const { rm: rmx } = require('../src/fsx'); // verified delete (Node 24 Windows: fs.rmSync is a no-op on non-ASCII paths)
 /**
  * Offline tests of mode "automat" (no SmartBill, no Carrefour, nothing issued): the SmartBill save, the XML preview,
  * the final "Salveaza" and the report lookups are MOCKS. Usage: node scripts/test-automat.js   exit 0 = all passed.
@@ -69,5 +70,5 @@ const code = async pr => { try { await pr; return 'ok'; } catch (e) { return e.c
     const r = await auto.runOnce(p, { log: () => {} }); assert(calls.length === 2 && !r.stopped && r.issued.length === 1); return '1 sarita (ciorna), 1 emisa'; });
   await T('B06', 'Mod ciorne neschimbat: cere doar ciorne (draftOnly), fara rulare de proba', async () => { const p = prof({ mode: 'ciorne' }); orders = mk(1); calls = []; behave = () => ({ issued: { invoiceId: 5 } }); await auto.runOnce(p, { log: () => {} }); assert(calls.length === 1 && calls[0].draftOnly === true && calls[0].issue === false); return 'draftOnly=true'; });
   fi.run = realRun;
-  const bad = results.filter(r => !r.ok).length; console.log(`\n${results.length - bad}/${results.length} teste automat trecute.`); fs.rmSync(tmp, { recursive: true, force: true }); process.exit(bad ? 1 : 0);
+  const bad = results.filter(r => !r.ok).length; console.log(`\n${results.length - bad}/${results.length} teste automat trecute.`); rmx(tmp); process.exit(bad ? 1 : 0);
 })();

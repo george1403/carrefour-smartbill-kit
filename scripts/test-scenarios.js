@@ -1,4 +1,5 @@
 'use strict';
+const { rm: rmx } = require('../src/fsx'); // verified delete (Node 24 Windows: fs.rmSync is a no-op on non-ASCII paths)
 /**
  * Scenario matrix (offline): a local MOCK of the Carrefour portal + unit checks. No real portal, no real accounts, no SmartBill writes.
  * Usage: node scripts/test-scenarios.js [--only=S01,S02] [--json=FILE]   exit 0 = all passed.
@@ -127,6 +128,6 @@ const expectErr = async (p, code) => { try { await p; } catch (e) { assert(e.cod
   const bad = results.filter(r => !r.ok);
   console.log(`\n${results.length - bad.length}/${results.length} scenarii trecute.`);
   if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(results, null, 2));
-  fs.rmSync(tmp, { recursive: true, force: true });
+  rmx(tmp);
   process.exit(bad.length ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

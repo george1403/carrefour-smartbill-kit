@@ -113,6 +113,21 @@ const arm = p => wf(path.join(p.dirs.out, 'automat-armat.json'), '{}');
   // ---------- Windows ----------
   await T('X33', 'Programare Windows: .cmd nu contine calea kitului (diacritice/spatii in cale nu se strica in cmd.exe)', async () => { const src = fs.readFileSync(path.join(ROOT, 'src/schedule.js'), 'utf8'); assert(/%~dp0\.\.\\\\\\\\run\.bat|%~dp0\.\.\\\\run\.bat/.test(src) && !/path\.join\(ROOT, 'run\.bat'\)/.test(src)); return 'call "%~dp0..\\run.bat"'; });
   await T('X34', 'Bulk fara "da" pe stdin (programare / fara terminal) -> nimic creat, exit 0', async () => { const p = prof(); calls = []; portalOrders = [ord(1)]; const r = await bulk.run(p, { confirm: async () => '', log: () => {} }); assert(calls.length === 0 && r.cancelled && r.exit === 0); return 'anulat'; });
+  await T('X35', 'Scriere atomica Windows: rename EPERM/EBUSY temporar -> reincearca; EPERM permanent -> copiere + stergere temp; fara .tmp ramas', async () => {
+    const fsx = require('../src/fsx'); const d = path.join(tmp, 'atom ă'); const f = path.join(d, '.setup-progress.json'); fsx.wf(f, 'v1');
+    const real = fs.renameSync; let n = 0;
+    try {
+      fs.renameSync = (a, b) => { if (n++ < 2) throw Object.assign(new Error('busy'), { code: n === 1 ? 'EPERM' : 'EBUSY' }); return real(a, b); };
+      fsx.wf(f, 'v2'); assert(fs.readFileSync(f, 'utf8') === 'v2' && n === 3, 'retry ' + n);
+      fs.renameSync = () => { throw Object.assign(new Error('held'), { code: 'EACCES' }); };
+      fsx.wf(f, 'v3'); assert(fs.readFileSync(f, 'utf8') === 'v3', 'fallback copiere');
+      fs.renameSync = () => { throw Object.assign(new Error('x'), { code: 'ENOSPC' }); };
+      let threw = false; try { fsx.wf(f, 'v4'); } catch (e) { threw = e.code === 'ENOSPC'; } assert(threw && fs.readFileSync(f, 'utf8') === 'v3', 'alta eroare trebuie aruncata, fisierul vechi intact');
+    } finally { fs.renameSync = real; }
+    assert(!fs.readdirSync(d).some(x => x.endsWith('.tmp')), 'temp ramas: ' + fs.readdirSync(d)); return 'retry, copiere, fara .tmp'; });
+  await T('X36', 'Stergere verificata (fsx.rm) in cale cu diacritice: fisier + folder dispar (Node 24 Windows: rmSync nu face nimic)', async () => {
+    const fsx = require('../src/fsx'); const d = path.join(tmp, 'kit fresh ă-rm'); fsx.wf(path.join(d, 'out', '.setup-progress.json'), '{}'); fsx.wf(path.join(d, 'a', 'b.txt'), 'x');
+    fsx.rm(path.join(d, 'out', '.setup-progress.json')); assert(!fs.existsSync(path.join(d, 'out', '.setup-progress.json')), 'fisier'); fsx.rm(d); assert(!fs.existsSync(d), 'folder'); fsx.rm(d); return 'ok'; });
 
   const ok = results.filter(r => r.ok).length; console.log(`\n${ok}/${results.length} PASS`);
   fs.writeFileSync(path.join(tmp, 'results.json'), JSON.stringify(results, null, 2)); process.exit(ok === results.length ? 0 : 1);

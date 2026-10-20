@@ -49,7 +49,9 @@ function previewText(p) {
 async function askYes(q) {
   if (process.env.KIT_BULK_CONFIRM) return process.env.KIT_BULK_CONFIRM;
   const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
-  return new Promise(r => { let done = false; rl.question(q, a => { done = true; rl.close(); r(a); }); rl.on('close', () => { if (!done) r(''); }); });
+  // after the answer stdin must be released: a closed readline leaves process.stdin readable+ref'd -> the process never exits (menu 9 hung after 'nu')
+  const release = () => { try { process.stdin.pause(); if (typeof process.stdin.unref === 'function') process.stdin.unref(); } catch {} };
+  return new Promise(r => { let done = false; rl.question(q, a => { done = true; rl.close(); release(); r(a); }); rl.on('close', () => { release(); if (!done) r(''); }); });
 }
 
 /**
@@ -109,6 +111,8 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
   } catch (e) { const c = require('./errors').classify(e); rep.exit = rep.exit || c.exit; rep.errors.push({ error: c.message.split('\n')[0] }); L('EROARE: ' + c.message.split('\n')[0]); }
   finally {
     wf(stateFile, JSON.stringify(state, null, 2)); unlock();
+    // the CAPTCHA OCR (tesseract.js) worker keeps a MessagePort open -> stop it, or the process hangs after the report
+    try { await require('./captchaOcr').terminate(); } catch {}
     if (rep.exit == null) rep.exit = rep.errors.length ? 1 : 0;
     rep.text = reportText(rep); L(rep.text);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
