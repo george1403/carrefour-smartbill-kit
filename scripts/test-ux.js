@@ -57,5 +57,6 @@ const ESC = /\x1b\[/;
     const all = Object.values(ls.t).join('\n'); for (const [n, v] of Object.entries(S)) assert(!all.includes(v), 'SECRET in zip: ' + n);
     const rez = ls.t['REZUMAT.txt']; assert(/Versiune kit/.test(rez) && /Node\.js/.test(rez) && /Sistem/.test(rez) && /CE FACI/.test(rez) && /drafts\.json: 2 comenzi/.test(rez) && /Ultimele optiuni/.test(rez) && /selftest/.test(rez), rez);
     fs.rmSync(k, { recursive: true, force: true }); fs.rmSync(dest, { recursive: true, force: true }); return ls.n.length + ' fisiere, 0 secrete'; });
+  await T('X9', 'Fisierele Windows (.bat/.ps1) au sfarsit de linie Windows (CRLF)', () => { for (const f of fs.readdirSync(ROOT).filter(x => /\.(bat|ps1)$/.test(x))) { const t = fs.readFileSync(path.join(ROOT, f), 'utf8'); assert(!/[^\r]\n/.test(t), f + ' are LF'); } return 'ok'; });
   const bad = results.filter(r => !r.ok).length; console.log(`\n${results.length - bad}/${results.length} teste UX trecute.`); process.exit(bad ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });
