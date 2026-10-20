@@ -56,8 +56,13 @@ Write-Host "Instalez browserul Chromium (o singura data, ~150 MB)..."
 Write-Host "== Instalare reusita." -ForegroundColor Green
 # files from a downloaded ZIP carry the "from internet" mark (SmartScreen asks each time): remove it inside the kit folder only
 try { Get-ChildItem -LiteralPath $Kit -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notlike '*\node_modules\*' -and $_.FullName -notlike '*\.runtime\*' } | Unblock-File -ErrorAction SilentlyContinue } catch {}
-# shortcut on the Desktop: double-click opens the menu
-if ($env:KIT_NO_SHORTCUT -ne '1') { try { $desk = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill.lnk')); $lnk.TargetPath = (Join-Path $Kit 'run.bat'); $lnk.WorkingDirectory = $Kit; $lnk.Save(); Write-Host 'Am pus pe Desktop scurtatura: Carrefour SmartBill' } catch {} }
-if (-not (Test-Path (Join-Path $Kit '.env'))) { & $node (Join-Path $Kit 'bin\kit.js') import-config --auto }
-if ((Test-Path (Join-Path $Kit '.env')) -and $env:KIT_FORCE_SETUP -ne '1') { Write-Host 'Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.bat), apoi alege 6 (Configurare).'; exit 0 }
+# shortcuts on the Desktop: "Carrefour SmartBill" opens the graphical interface in the browser (small minimized window = the program);
+# "Carrefour SmartBill - Meniu text" opens the old numbered menu (fallback)
+$uiLnk = $null
+if ($env:KIT_NO_SHORTCUT -ne '1') { try { $desk = [Environment]::GetFolderPath('Desktop'); $ws = New-Object -ComObject WScript.Shell
+  $lnk = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill.lnk')); $lnk.TargetPath = (Join-Path $Kit 'run.bat'); $lnk.Arguments = 'ui'; $lnk.WorkingDirectory = $Kit; $lnk.WindowStyle = 7; $lnk.Save(); $uiLnk = $lnk.FullName
+  $m = $ws.CreateShortcut((Join-Path $desk 'Carrefour SmartBill - Meniu text.lnk')); $m.TargetPath = (Join-Path $Kit 'run.bat'); $m.WorkingDirectory = $Kit; $m.Save()
+  Write-Host 'Am pus pe Desktop scurtaturile: Carrefour SmartBill (programul) si Carrefour SmartBill - Meniu text (rezerva)' } catch {} }
+if ((Test-Path (Join-Path $Kit '.env')) -and $env:KIT_FORCE_SETUP -ne '1') { Write-Host 'Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.bat), apoi apasa Configurare.'; exit 0 }
+if ($env:KIT_NO_SETUP -ne '1' -and $uiLnk) { Write-Host 'Se deschide programul in browser: apasa Configurare.'; Start-Process -FilePath $uiLnk; exit 0 }
 if ($env:KIT_NO_SETUP -ne '1') { & $node (Join-Path $Kit 'bin\kit.js') setup }

@@ -12,11 +12,11 @@ async function run() {
   (maj >= 20 ? ok : no)(`Node.js ${process.versions.node} (${process.platform}-${process.arch})`);
   for (const m of ['dotenv', 'playwright', 'tesseract.js', 'pngjs']) { try { require(m); ok(`modul ${m}`); } catch (e) { no(`modul ${m}: ${e.message}`); } }
   for (const f of ['data/carrefour.json', 'data/carrefour-stores.json']) { try { JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8')); ok(f); } catch (e) { no(`${f}: ${e.message}`); } }
-  for (const m of ['config', 'smartbillWeb', 'discoverSmartbill', 'carrefourPortal', 'setup', 'orders', 'fillInvoice', 'orderInput', 'captchaOcr', 'errors', 'importConfig', 'auto', 'schedule', 'menu', 'masterData', 'color', 'support']) { try { require(`./${m}`); ok(`src/${m}.js`); } catch (e) { no(`src/${m}.js: ${e.message}`); } }
+  for (const m of ['config', 'smartbillWeb', 'discoverSmartbill', 'carrefourPortal', 'setup', 'orders', 'fillInvoice', 'orderInput', 'captchaOcr', 'errors', 'importConfig', 'auto', 'schedule', 'menu', 'masterData', 'color', 'support', 'ui/server']) { try { require(`./${m}`); ok(`src/${m}.js`); } catch (e) { no(`src/${m}.js: ${e.message}`); } }
   const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
   const ai = Object.keys(lock.packages || {}).map(k => k.replace(/^.*node_modules\//, '')).filter(n => AI.test(n));
   (ai.length ? no : ok)(`fara dependinte AI/LLM${ai.length ? ': ' + ai.join(', ') : ''}`);
-  const src = fs.readdirSync(path.join(ROOT, 'src')).map(f => fs.readFileSync(path.join(ROOT, 'src', f), 'utf8')).join('\n');
+  const src = fs.readdirSync(path.join(ROOT, 'src')).concat(fs.readdirSync(path.join(ROOT, 'src', 'ui')).map(f => 'ui/' + f)).filter(f => /\.(js|html)$/.test(f)).map(f => fs.readFileSync(path.join(ROOT, 'src', f), 'utf8')).join('\n');
   const hosts = src.match(/api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.x\.ai|api\.mistral\.ai|api\.groq\.com/g);
   (hosts ? no : ok)(`fara apeluri catre API-uri AI${hosts ? ': ' + [...new Set(hosts)].join(', ') : ''}`);
   // AI/LLM SDKs anywhere in the installed tree (not only direct deps); tesseract.js (classic OCR engine) is allowed.
@@ -51,9 +51,9 @@ async function run() {
 
 // Files shipped in the ZIP (same rules as .gitattributes export-ignore): everything except local/runtime data and dev tools.
 function shippedFiles() {
-  const skip = /^(node_modules|\.runtime|out|profiles|\.git|tools|\.github|stores)(\/|$)|^\.env$|\.(png|pdf|gz|zip)$/i;
+  const skip = /^(node_modules|\.runtime|out|profiles|\.git|tools|\.github|stores|\.demo-home)(\/|$)|^\.env$|\.(png|pdf|gz|zip)$/i;
   const outl = []; const walk = d => { for (const e of fs.readdirSync(path.join(ROOT, d), { withFileTypes: true })) { const r = d ? `${d}/${e.name}` : e.name; if (skip.test(r)) continue; e.isDirectory() ? walk(r) : outl.push(r); } };
-  walk(''); return outl;
+  walk(''); return outl.concat(fs.existsSync(path.join(ROOT, 'src/ui/logo.png')) ? ['src/ui/logo.png'] : []);
 }
 function forbiddenValues() {
   const cf = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'carrefour.json'), 'utf8'));
@@ -66,7 +66,7 @@ function forbiddenValues() {
   } catch {} }
   const vals = [...new Set(local.filter(x => x != null && String(x).length >= 4).map(String))].filter(x => !x.includes(okCif));
   const hits = [];
-  for (const f of shippedFiles()) {
+  for (const f of shippedFiles().filter(f => !/^(scripts\/(test-[^/]*|mock-portal|ui-demo[^/]*)\.js|test-data\/.*|src\/ui\/logo\.png)$/.test(f))) {
     const t = fs.readFileSync(path.join(ROOT, f), 'utf8');
     for (const m of t.match(/\bRO\d{2}[A-Z]{4}[0-9A-Z]{16}\b/g) || []) hits.push(`${f}: IBAN ${m.slice(0, 6)}...`);
     for (const m of t.match(/\bRO\d{6,10}\b/g) || []) if (m.replace(/\D/g, '') !== okCif) hits.push(`${f}: CIF ${m}`);

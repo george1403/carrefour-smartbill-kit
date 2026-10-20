@@ -59,10 +59,18 @@ if [ "$PLAT" = linux ]; then
 fi
 node bin/kit.js selftest || fail "Testul de verificare a esuat."
 say "== Instalare reusita."
-# shortcut on the Desktop (Mac): double-click opens the menu
+# shortcuts on the Desktop (Mac): "Carrefour SmartBill" opens the graphical interface in the browser (an app, no Terminal window);
+# "Carrefour SmartBill - Meniu text" opens the old numbered menu (fallback)
+UI_APP=""
 if [ "$PLAT" = darwin ] && [ -d "$HOME/Desktop" ] && [ "${KIT_NO_SHORTCUT:-0}" != 1 ]; then
-  SC="$HOME/Desktop/Carrefour SmartBill.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SC" && chmod +x "$SC" && say "Am pus pe Desktop scurtatura: Carrefour SmartBill"
+  mkdir -p "$RT"; rm -rf "$HOME/Desktop/Carrefour SmartBill.app"
+  ESC_DIR="$(printf '%s' "$KIT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  if osacompile -o "$HOME/Desktop/Carrefour SmartBill.app" -e "do shell script \"cd \" & quoted form of \"$ESC_DIR\" & \" && KIT_NO_PAUSE=1 /bin/bash ./run.sh ui > .runtime/ui.log 2>&1 &\"" >/dev/null 2>&1; then
+    rm -f "$HOME/Desktop/Carrefour SmartBill.command"; UI_APP="$HOME/Desktop/Carrefour SmartBill.app"
+  else SC="$HOME/Desktop/Carrefour SmartBill.command"; printf '#!/bin/bash\nexec "%s/run.command" ui\n' "$KIT_DIR" > "$SC" && chmod +x "$SC"; fi
+  SM="$HOME/Desktop/Carrefour SmartBill - Meniu text.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SM" && chmod +x "$SM"
+  say "Am pus pe Desktop scurtaturile: Carrefour SmartBill (programul) si Carrefour SmartBill - Meniu text (rezerva)"
 fi
-[ -f "$KIT_DIR/.env" ] || node bin/kit.js import-config --auto || true
-if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.command), apoi alege 6 (Configurare)."; exit 0; fi
+if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.command), apoi apasa Configurare."; exit 0; fi
+if [ "${KIT_NO_SETUP:-0}" != 1 ] && [ -n "$UI_APP" ]; then say "Se deschide programul in browser: apasa Configurare."; open "$UI_APP"; exit 0; fi
 if [ "${KIT_NO_SETUP:-0}" != 1 ]; then exec "$KIT_DIR/run.sh" setup; fi

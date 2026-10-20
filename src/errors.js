@@ -60,4 +60,5 @@ function classify(e) {
   if (/login esuat \(verifica emailul\/parola/i.test(m)) return { exit: EXIT.AUTH, message: 'SmartBill nu a acceptat emailul/parola din configurare.' };
   return { exit: EXIT.ERROR, message: m };
 }
-module.exports = { EXIT, HELP, STEPS, ceFaci, kitError, classify };
+const BLOCKED_MSG = 'Windows a marcat fisierele programului ca "descarcate de pe internet" si le poate bloca. Inchide programul, click dreapta pe ZIP-ul descarcat > Proprietati > bifeaza "Deblocheaza" > OK, dezarhiveaza din nou si da dublu-click pe install.bat.';
+module.exports = { BLOCKED_MSG, EXIT, HELP, STEPS, ceFaci, kitError, classify };

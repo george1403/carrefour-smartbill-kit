@@ -16,16 +16,20 @@ function copyTree(src, dst, stats) {
     if (e.isDirectory()) { fs.mkdirSync(d, { recursive: true }); copyTree(s, d, stats); }
     else if (!fs.existsSync(d)) { fs.copyFileSync(s, d); stats.n++; } else stats.kept++; }
 }
-function run({ from = null, auto = false } = {}) {
+/** Only on explicit request (menu 8 / UI button), after the person confirmed the source folder by name. */
+function run({ from = null, auto = false, confirmed = process.env.KIT_IMPORT_CONFIRM === 'da' } = {}) {
+  if (auto) return ''; // installs no longer import by themselves (they could pick up ANOTHER kit's accounts)
   if (fs.existsSync(path.join(ROOT, '.env')) && !from) return 'Acest kit are deja configurarea (.env). Nu am schimbat nimic.';
   const list = from ? [path.resolve(from)] : candidates();
   if (!list.length) return auto ? '' : 'Nu am gasit un kit vechi configurat (cu .env) in Descarcari, Desktop, Documente sau langa acest folder. Daca il ai in alta parte: import-config "CALEA/catre/kitul-vechi". Altfel alege 6 (Configurare).';
   const src = list[0]; if (!isKit(src)) return `In ${src} nu e un kit configurat (lipseste .env).`;
+  if (!confirmed) return `Am gasit un kit configurat in: ${src}\nNu am preluat nimic: confirma intai ca e kitul TAU vechi.`;
   const stats = { n: 0, kept: 0 };
   if (!fs.existsSync(path.join(ROOT, '.env'))) { fs.copyFileSync(path.join(src, '.env'), path.join(ROOT, '.env')); try { fs.chmodSync(path.join(ROOT, '.env'), 0o600); } catch {} stats.n++; }
   for (const sub of ['profiles', 'out']) if (fs.existsSync(path.join(src, sub))) { fs.mkdirSync(path.join(ROOT, sub), { recursive: true }); copyTree(path.join(src, sub), path.join(ROOT, sub), stats); }
-  // hourly check started the OLD folder: point it to this one (same interval)
-  let sched = ''; try { const s = require('./schedule'); const cur = s.current(); if (cur && cur.includes(src) && !cur.includes(ROOT)) { const m = cur.match(/StartInterval<\/key><integer>(\d+)/) || cur.match(/<Interval>PT(\d+)M/); s.install({ every: m ? (/StartInterval/.test(m[0]) ? Number(m[1]) / 60 : Number(m[1])) : 60 }); sched = '\n  Verificarea automata porneste de acum acest folder.'; } } catch (e) { sched = '\n  ATENTIE: verificarea automata nu a putut fi mutata: ' + e.message.split('\n')[0] + ' (meniul 6 o reface).'; }
+  // the hourly check of the OLD folder is NOT moved (it may be another person's / the real kit): the person starts it here
+  let sched = ''; try { if (require('./schedule').current()) sched = ''; else sched = '\n  Verificarea automata NU a fost mutata. Daca o vrei aici: Verificare automata > Porneste (si opreste-o in kitul vechi).'; } catch {}
   return `Am preluat configurarea din kitul vechi: ${src}\n  ${stats.n} fisiere copiate (conturi, profil, jurnalul comenzilor facute), ${stats.kept} existente pastrate. Kitul vechi a ramas neatins; il poti arhiva.${sched}`;
 }
-module.exports = { run, candidates };
+function list() { return candidates(); }
+module.exports = { run, candidates, list };

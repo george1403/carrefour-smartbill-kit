@@ -2,7 +2,7 @@
 
 Doar 2 conturi: SmartBill + portal furnizori Carrefour. Restul se descopera automat. Vezi `docs/GHID_CONFIGURARE.md`.
 
-**Producatori:** totul se face cu dublu-click (install, apoi scurtatura *Carrefour SmartBill* de pe Desktop) si numere din meniu
+**Producatori:** scurtatura *Carrefour SmartBill* de pe Desktop deschide **interfata grafica in browser** (`node bin/kit.js ui`: server local pe 127.0.0.1, port aleator, token pe sesiune; aceleasi comenzi ca meniul). Scurtatura *Meniu text* = rezerva. In meniul text: totul se face cu dublu-click (install, apoi scurtatura *Carrefour SmartBill* de pe Desktop) si numere din meniu
 (1-9 neschimbate; 10 lista ciorne in bloc, 11 verificare la fiecare ora, 12 reciteste datele, 13 raport suport, 14 reparare, 15 dezinstalare).
 Ghidul `docs/GHID_CONFIGURARE.md` nu contine nicio comanda. Sectiunea de mai jos e **doar pentru tehnicieni**.
 
@@ -33,8 +33,8 @@ Dupa login se verifica furnizorul (`carrefour.expectedSupplierCode`, confirmat l
 Coduri: 0 ok · 1 eroare · 2 dubla refuzata · 3 autentificare Carrefour (optiunea 5) · 4 parola gresita · 5 internet/portal cazut ·
 6 portal schimbat · 7 autentificare manuala neterminata · 8 disc/permisiuni · 9 instalare incompleta · 10 configurare · 11 necesita verificare · 12 cont altui furnizor.
 
-Teste: `node bin/kit.js selftest` (rapid), `node scripts/test-ux.js` (meniu, culori, CE FACI, raport suport fara secrete), `node scripts/test-bulk.js` (ciorne in bloc) si `node scripts/test-scenarios.js` (matricea de scenarii, portal simulat local, ~4 min).
-Actualizare: `node bin/kit.js import-config [folder-vechi]` (si automat la install) copiaza .env, profiles/, out/ si muta programarea.
+Teste: `node bin/kit.js selftest` (rapid), `node scripts/test-ui.js` (interfata: token, CSRF, fara secrete, ciorne in bloc cu confirmare, lock), `node scripts/test-install-safety.js` (programare per folder, preluare doar cu confirmare), `node scripts/test-ux.js` (meniu, culori, CE FACI, raport suport fara secrete), `node scripts/test-bulk.js` (ciorne in bloc) si `node scripts/test-scenarios.js` (matricea de scenarii, portal simulat local, ~4 min).
+Actualizare: `node bin/kit.js import-config [folder-vechi]` copiaza .env, profiles/, out/ DOAR cu confirmare (meniu 8 / buton in Configurare; `KIT_IMPORT_CONFIRM=da`); install NU mai preia singur si programarea NU se muta. Programarea are nume per folder (`CarrefourSmartBillKit-<hash>` / `ro.carrefour-smartbill-kit.<hash>`); vechiul nume global e atins doar daca porneste acest folder. Demo: `node bin/kit.js ui --demo` (portal + SmartBill simulate, doar intr-un folder fara conturi).
 
 ## Mod "automat" - protectii (2026-10-20)
 - Prima rulare automata intr-un folder = doar verificare (lista in log, nimic emis); se emite de la a doua rulare (`out/<profil>/automat-armat.json`).

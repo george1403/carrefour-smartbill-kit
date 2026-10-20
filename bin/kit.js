@@ -10,6 +10,7 @@ const cmd = args[0];
 const opt = n => { const a = args.find(x => x.startsWith(`--${n}=`)); return a ? a.slice(n.length + 3) : null; };
 const flag = n => args.includes(`--${n}`);
 const HELP = `Comenzi:
+  ui                    interfata grafica in browser (scurtatura de pe Desktop); [--no-open] [--demo = portal + SmartBill simulate]
   setup                 configurare (4 intrebari: email+parola SmartBill, utilizator+parola Carrefour)
   login-carrefour       (meniu 5) prima autentificare in portalul Carrefour: se deschide o fereastra vizibila,
                         scrii tu codul CAPTCHA o singura data; sesiunea se pastreaza
@@ -41,12 +42,15 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
 
 (async () => {
   if (!cmd || cmd === 'help') return console.log(HELP);
+  if (process.platform === 'win32' && (cmd === 'ui' || cmd === 'menu')) { try { if (require('fs').existsSync(require('path').join(__dirname, '..', 'run.bat') + ':Zone.Identifier')) console.log(require('../src/color').stdout.warn('ATENTIE: ') + require('../src/errors').BLOCKED_MSG); } catch {} }
   if (cmd === 'setup') return require('../src/setup').run({ dryRun: flag('dry-run') });
   if (cmd === 'selftest') return require('../src/selftest').run();
   if (cmd === 'menu') return require('../src/menu').run();
+  if (cmd === 'ui') { await require('../src/ui/server').main({ demo: flag('demo'), open: !flag('no-open') }); return; }
   if (cmd === 'support') return console.log(require('../src/support').run().text);
   if (cmd === 'repair') { const r = require('../src/support').repair(); process.exitCode = r.ok ? 0 : 9; return; }
-  if (cmd === 'uninstall') { const s = require('../src/schedule'); console.log(s.remove()); for (const n of ['Carrefour SmartBill.lnk', 'Carrefour SmartBill.command']) { try { require('fs').unlinkSync(require('path').join(require('os').homedir(), 'Desktop', n)); console.log('Am sters scurtatura de pe Desktop.'); } catch {} } console.log('\nPoti sterge acum tot folderul programului (trage-l in Cos / Recycle Bin).\nInainte, daca vrei sa pastrezi istoricul, copiaza folderul "out" si fisierul ".env" (contine parolele tale; nu-l trimite nimanui).'); return; }
+  if (cmd === 'uninstall') { const s = require('../src/schedule'); console.log(s.remove()); for (const n of ['Carrefour SmartBill.lnk', 'Carrefour SmartBill.command', 'Carrefour SmartBill.app', 'Carrefour SmartBill - Meniu text.lnk', 'Carrefour SmartBill - Meniu text.command']) { const f = require('path').join(require('os').homedir(), 'Desktop', n); if (require('fs').existsSync(f)) { try { require('../src/fsx').rm(f); console.log('Am sters scurtatura de pe Desktop: ' + n); } catch {} } } console.log('\nPoti sterge acum tot folderul programului (trage-l in Cos / Recycle Bin).\nInainte, daca vrei sa pastrezi istoricul, copiaza folderul "out" si fisierul ".env" (contine parolele tale; nu-l trimite nimanui).'); return; }
+  if (cmd === 'import-config' && flag('list')) return console.log(JSON.stringify(require('../src/importConfig').list()));
   if (cmd === 'import-config') return console.log(require('../src/importConfig').run({ from: args[1] && !args[1].startsWith('--') ? args[1] : null, auto: flag('auto') }));
   const profile = loadProfile(opt('profile'));
   if (cmd === 'login-carrefour' && (flag('relay') || opt('relay'))) { const dir = opt('relay') || require('path').join(profile.dirs.out, 'captcha-relay'); return console.log(await require('../src/carrefourPortal').captchaRelay(profile, { dir })); }

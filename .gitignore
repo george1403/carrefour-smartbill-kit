@@ -8,3 +8,4 @@ logs/
 *.log
 stores/
 !profiles/.gitkeep
+.demo-home/

@@ -13,6 +13,7 @@ if not exist "%KIT%node_modules\playwright" goto noinstall
 cd /d "%KIT%"
 node "%KIT%bin\kit.js" %ARGS%
 set "RC=%ERRORLEVEL%"
+if /i "%~1"=="ui" if "%RC%"=="0" exit /b 0
 if not "%KIT_NO_PAUSE%"=="1" pause
 exit /b %RC%
 :noinstall

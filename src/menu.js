@@ -53,7 +53,7 @@ async function run() {
   const pause = async () => { if (tty && !closed) await ask('\nApasa ' + c.bold('Enter') + ' pentru a reveni la meniu...'); };
 
   for (;;) {
-    console.log('\n' + c.bold('=== Carrefour -> SmartBill ==='));
+    console.log('\n' + c.bold('=== Carrefour -> SmartBill ===') + '  De aici, de aproape - kit pentru producatorii artizani');
     ITEMS.forEach(([k, t]) => console.log(`${c.bold(k.padStart(2))}) ${t}`)); console.log(`${c.bold(' 0')}) Iesire`);
     const k = await ask('Scrie numarul optiunii si apasa Enter: '); if (k === '0' || (k === '' && closed)) break; if (k === '') continue;
     const it = ITEMS.find(x => x[0] === k); if (!it) { console.log(c.warn(`Nu exista optiunea "${k}". Scrie un numar din lista (0-15).`)); continue; }
@@ -63,7 +63,8 @@ async function run() {
       if (k === '11') { const x = await ask(`${c.bold('1')} = porneste (la fiecare ora)   ${c.bold('2')} = opreste   (Enter = inapoi): `); if (x === '1') a = 'porneste'; else if (x === '2') a = 'opreste'; else continue; }
       if (k === '15' && !(await yes('Opresc verificarea automata si iti arat cum stergi programul?'))) { console.log('Nu am schimbat nimic.'); continue; }
       let rc;
-      if (k === '9') rc = await bulk(exec, yes);
+      if (k === '8') rc = await importOld(yes, exec);
+      else if (k === '9') rc = await bulk(exec, yes);
       else rc = exec(it[2](a));
       // auto-recovery: expired Carrefour session -> guided login window, then the same option again
       if (rc === 3 && k !== '5') { console.log('\n' + c.warn('Portalul Carrefour cere din nou autentificarea.'));
@@ -90,4 +91,11 @@ async function bulk(exec, yes) {
     return exec(['bulk-ciorne'], { KIT_BULK_CONFIRM: 'da' }, false);
   } finally { try { fs.unlinkSync(sum); } catch {} }
 }
-module.exports = { run, ITEMS, bulk };
+/** Option 8: nothing is imported unless the person confirms the exact source folder. */
+async function importOld(yes, exec) {
+  const r = spawnSync(process.execPath, [kit, 'import-config', '--list'], { encoding: 'utf8' }); let list = []; try { list = JSON.parse(r.stdout.trim().split('\n').pop()); } catch {}
+  if (!list.length) { console.log('Nu am gasit un kit vechi configurat in Descarcari, Desktop, Documente sau langa acest folder. Alege 6 (Configurare).'); return 0; }
+  if (!(await yes(`Preiau conturile si setarile din kitul vechi:\n  ${list[0]}\nE kitul TAU vechi?`))) { console.log('Nu am preluat nimic.'); return 0; }
+  return exec(['import-config', list[0]], { KIT_IMPORT_CONFIRM: 'da' }, false);
+}
+module.exports = { run, ITEMS, bulk, importOld };

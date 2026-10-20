@@ -119,7 +119,10 @@ const expectErr = async (p, code) => { try { await p; } catch (e) { assert(e.cod
     fs.writeFileSync(path.join(old, '.env'), 'SMARTBILL_EMAIL="x"\n'); fs.mkdirSync(path.join(old, 'profiles')); fs.writeFileSync(path.join(old, 'profiles', 'firma.json'), '{}'); fs.writeFileSync(path.join(old, 'profiles', '.default'), 'firma');
     fs.mkdirSync(path.join(old, 'out', 'firma'), { recursive: true }); fs.writeFileSync(path.join(old, 'out', 'firma', 'drafts.json'), '{"1":{}}');
     fs.copyFileSync(path.join(ROOT, 'src', 'importConfig.js'), path.join(neu, 'src', 'importConfig.js'));
-    const r = spawnSync(process.execPath, ['-e', `console.log(require(${JSON.stringify(path.join(neu, 'src', 'importConfig.js'))}).run({auto:true}))`], { encoding: 'utf8', env: { ...process.env, HOME: tmp } });
+    // installs no longer import by themselves (2026-10-20): auto = nothing; only the confirmed request (menu 8 / UI) copies
+    const r0 = spawnSync(process.execPath, ['-e', `console.log(require(${JSON.stringify(path.join(neu, 'src', 'importConfig.js'))}).run({auto:true}))`], { encoding: 'utf8', env: { ...process.env, HOME: tmp } });
+    assert(!fs.existsSync(path.join(neu, '.env')), 'instalarea a preluat singura' + r0.stdout);
+    const r = spawnSync(process.execPath, ['-e', `console.log(require(${JSON.stringify(path.join(neu, 'src', 'importConfig.js'))}).run({}))`], { encoding: 'utf8', env: { ...process.env, HOME: tmp, KIT_IMPORT_CONFIRM: 'da' } });
     for (const f of ['.env', 'profiles/firma.json', 'profiles/.default', 'out/firma/drafts.json']) assert(fs.existsSync(path.join(neu, f)), 'lipseste ' + f + r.stdout + r.stderr);
     assert(fs.existsSync(path.join(old, '.env')), 'vechiul atins'); const again = spawnSync(process.execPath, ['-e', `console.log(require(${JSON.stringify(path.join(neu, 'src', 'importConfig.js'))}).run({}))`], { encoding: 'utf8' });
     assert(/deja/.test(again.stdout), 'a doua oara'); return r.stdout.split('\n')[1].trim(); });

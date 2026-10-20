@@ -1,100 +1,95 @@
 # Facturi SmartBill din comenzile Carrefour — ghid de pornire
 
+*Kit pentru producătorii artizani de facturare automată portal Carrefour → SmartBill*
+
 **De ce ai nevoie:** un calculator cu Windows sau Mac, internet, contul SmartBill (email + parola) si contul **firmei tale** din portalul de furnizori Carrefour (utilizator + parola).
 
-**Totul se face cu dublu-click si alegand un numar din meniu.** Nu trebuie sa scrii nicio comanda si nu trebuie sa deschizi alte programe.
+**Totul se face cu dublu-click si cu butoane mari.** Programul se deschide **in browser** (Chrome, Edge sau Safari) si arata **la fel pe Windows si pe Mac**. Nu trebuie sa scrii nicio comanda.
 
 ## 1. Descarca si dezarhiveaza
-1. Descarca fisierul ZIP primit (de ex. **carrefour-smartbill-kit-WINDOWS.zip** sau **-MAC.zip**).
-2. **Windows:** click dreapta pe el → **Extrage tot** → **Extragere**. **Mac:** dublu-click pe el.
-3. Muta folderul obtinut in **Documente**. Evita folderele sincronizate (OneDrive/iCloud) daca se poate.
+**Windows (important, altfel instalarea poate fi blocata fara niciun mesaj):**
+1. Descarca **carrefour-smartbill-kit-WINDOWS.zip**.
+2. **Click dreapta pe ZIP → Proprietati**. Jos, la *Securitate*, bifeaza **Deblocheaza** → **OK**.
+3. Click dreapta pe ZIP → **Extrage tot** → **Extragere**.
+
+**Mac:** descarca **carrefour-smartbill-kit-MAC.zip** si da dublu-click pe el.
+
+Muta folderul obtinut in **Documente**. Evita folderele sincronizate (OneDrive/iCloud) daca se poate.
 
 ## 2. Instaleaza (o singura data, 5–10 minute)
 **Windows:** dublu-click pe **install.bat**.
 - Daca apare fereastra albastra „Windows a protejat PC-ul”: click pe **Mai multe informatii** → **Executare oricum**.
+- Daca nu se intampla nimic sau scrie „INSTALAREA NU S-A TERMINAT”: ai sarit pasul *Deblocheaza* de mai sus. Sterge folderul, fa pasul 2 din capitolul 1 si dezarhiveaza din nou.
 
 **Mac:** dublu-click pe **install.command**.
 - Daca apare „nu poate fi deschis / dezvoltator neidentificat”: apasa **OK** (sau **Terminat**), deschide  → **Setari sistem** → **Confidentialitate si securitate**, coboara pana la mesajul despre *install.command* si apasa **Deschide oricum**, apoi **Deschide** (poate cere parola calculatorului).
 - Pe Mac-uri mai vechi merge si: click dreapta pe **install.command** → **Deschide** → **Deschide**.
 
-Programul isi descarca singur tot ce ii trebuie si scrie **Instalare reusita**. Tot el:
-- scoate „avertismentul de internet” de pe fisierele programului (data viitoare merge direct dublu-click);
-- pune pe **Desktop** scurtatura **Carrefour SmartBill** — de acum o folosesti pe ea ca sa deschizi meniul.
+Programul isi descarca singur tot ce ii trebuie si scrie **Instalare reusita**. Pune pe **Desktop** doua scurtaturi:
+- **Carrefour SmartBill** — programul (se deschide in browser). Pe aceasta o folosesti mereu.
+- **Carrefour SmartBill - Meniu text** — vechiul meniu cu numere, doar ca rezerva.
 
-## 3. Raspunde la intrebari
-1. Emailul SmartBill  2. Parola SmartBill  3. Utilizatorul Carrefour  4. Parola Carrefour
+La prima instalare programul se deschide singur la **Configurare**.
 
-- **Alegi seria de facturi** scriind numarul ei din lista.
-- Programul iti arata **furnizorul si codul de furnizor** citite din portalul Carrefour. Raspunde *da* doar daca e firma ta.
-- Daca portalul cere un cod din imagine, se deschide o fereastra: scrie codul si apasa *Autentificare*.
+## 3. Ecranul principal
+Dublu-click pe **Carrefour SmartBill** de pe Desktop. Se deschide o pagina in browser cu:
+- **sus**: firma, seria facturilor, modul de lucru (*doar ciorne* sau *automat*), daca verificarea la fiecare ora e pornita, ultima actiune si **problemele deschise** (fiecare cu butonul care o rezolva);
+- **butoanele mari**: Ciornă pentru o comandă · Ciorne în bloc · Autentificare Carrefour · Verificare automată · Istoric · Configurare · Raport suport · Reparare · Dezinstalare.
 
-Parolele raman doar pe calculatorul tau; nu le trimite nimanui.
+Cat timp programul lucreaza apare o caseta galbena **LUCREZ… Nu închide fereastra.** La final apare **GATA** (verde) sau o caseta rosie **CE FACI** cu pasii de urmat si un buton care rezolva problema. Programul face **o singura actiune odata**; celelalte butoane asteapta.
 
-## 4. Alege cum lucreaza
-- **1 = doar ciorne** (recomandat la inceput): programul pregateste facturile ca **ciorne** in SmartBill; tu le verifici si apesi *Emite*.
-- **2 = automat**: programul emite singur factura pentru fiecare comanda noua.
+Pe Windows, langa ceas apare o fereastra mica, micsorata: e programul. Nu o inchide cat lucrezi. Programul se opreste singur dupa 30 de minute fara folosire sau cu butonul **Închide programul**.
 
-Poti cere sa verifice singur comenzile **la fiecare ora** (raspunde *da*; poti schimba oricand cu optiunea **11**). Comenzile mai vechi decat ziua instalarii nu se factureaza automat. O comanda deja facturata, deja in ciorna sau cu factura ANULATA nu se mai face a doua oara.
+## 4. Configurare
+Butonul **Configurare**:
+1. Scrii **emailul si parola SmartBill**, **utilizatorul si parola Carrefour** (la a doua configurare poti alege *Folosesc conturile salvate*).
+2. Alegi **cum lucreaza** cand verifica singur comenzile noi:
+   - **Doar ciorne** (recomandat): pregateste facturile ca **ciorne** in SmartBill; tu le verifici si apesi *Emite*.
+   - **Automat**: emite singur factura pentru fiecare comanda noua.
+3. Bifezi daca vrei sa **verifice singur la fiecare ora**.
+4. Apesi **Pornește configurarea**. Programul citeste SmartBill si portalul si te intreaba pe ecran **ce serie folosesti** (apesi pe ea) si daca **furnizorul** gasit in portal e firma ta (**Da** doar daca e firma ta).
 
-## 5. Meniul
-Dublu-click pe scurtatura **Carrefour SmartBill** de pe Desktop (sau pe **run.bat** / **run.command** din folder). Scrii **numarul** optiunii si apesi **Enter**.
+Parolele raman doar pe calculatorul tau si nu apar niciodata pe ecran.
 
-| Nr | Ce face |
-|---|---|
-| 1 | Vezi comenzile Carrefour (noi / deja facturate) |
-| 2 | Fa CIORNA pentru o comanda (iti cere numarul comenzii) |
-| 3 | Previzualizare comanda (nu salveaza nimic) |
-| 4 | Verificare automata acum |
-| **5** | **Autentificare Carrefour** (codul din imagine) |
-| 6 | Configurare (conturi, serie, mod de lucru) |
-| 7 | Verificare instalare |
-| 8 | Actualizare: preia conturile si setarile din kitul vechi |
-| **9** | **Ciorne in bloc** — toate comenzile nefacturate |
-| 10 | Ciorne in bloc — DOAR LISTA (nu creeaza nimic) |
-| 11 | Verificare automata la fiecare ora: porneste / opreste |
-| 12 | Reciteste datele din SmartBill si Carrefour (serii, produse, magazine) |
-| **13** | **Trimite raport la suport** |
-| 14 | Reparare instalare |
-| 15 | Dezinstalare |
-| 0 | Iesire |
+**Ai un kit mai vechi, deja configurat?** In Configurare apasa **Preia setările din kitul vechi**. Programul iti arata folderul gasit; confirma doar daca e **kitul tau**. Nimic nu se preia fara confirmarea ta.
 
-Cat timp programul lucreaza scrie **LUCREZ...** — nu inchide fereastra. La final scrie **GATA** (verde) sau **NU S-A TERMINAT** (rosu, cu pasii de urmat). Apoi apasa **Enter** ca sa revii la meniu.
+## 5. Ciornă pentru o comandă
+Scrii **numarul comenzii Carrefour** (ex. 1780308) si apesi **Fă ciorna**. Factura se salveaza in SmartBill ca **ciorna** (nu se emite). Daca exista deja factura sau ciorna, programul se opreste si scrie **OPRIT, ca să nu faci o dublă**. *Doar previzualizare* completeaza formularul fara sa salveze nimic; *Vezi lista comenzilor* iti arata comenzile din portal.
 
-### Optiunea 9 — Ciorne in bloc (toate comenzile nefacturate)
-Face **ciorne** pentru **TOATE** comenzile din portal care nu sunt inca facturate, **oricat de vechi**.
+## 6. Ciorne în bloc (toate comenzile nefacturate)
+1. Apesi **Arată lista**. Programul citeste **toate** comenzile din portal, oricat de vechi, si iti arata un tabel: comanda, data, magazinul, totalul fara TVA, plus cele care **au deja ciornă** si cele **sărite** (cu motiv). **Nu se creeaza nimic.**
+2. Apesi **Creează ciornele (N)**. Apare o confirmare: bifezi **Am înțeles** si apesi **Da, creează N ciorne**.
+3. Programul le face pe rand, in loturi de cate 10, verificand inainte de fiecare ca nu exista deja factura sau ciorna. La final vezi tabelul cu ciornele create.
 
-1. Programul citeste portalul si iti arata **lista**: cate comenzi, totalul fara TVA, cele care **au deja ciorna** (nu se fac a doua oara) si cele **sarite**, fiecare cu motivul.
-2. Te intreaba (cu galben): **Scrie da si apasa Enter**. Orice alt raspuns = nu se creeaza nimic.
-3. Le face pe toate, singur, **in loturi de cate 10**, verificand inainte de fiecare ca nu exista deja factura sau ciorna.
-4. La final: **raport** cu ciornele create, cele care aveau deja ciorna, cele sarite si erorile.
+Face **numai ciorne**, chiar si in modul *automat*: **nu emite nicio factura**. Le verifici si le emiti din SmartBill > Ciorne.
 
-Face **numai ciorne**, chiar daca ai ales modul *automat*: **nu emite nicio factura**. Tu le verifici si le emiti din SmartBill > Ciorne.
-Vrei doar sa vezi lista, fara sa se creeze nimic? Alege **10**.
-Daca portalul cere autentificarea, programul te intreaba daca deschide fereastra (scrie **da**), apoi reia singur. O rulare oprita se poate relua oricand — ce e deja facut nu se dubleaza.
+## 7. Autentificare Carrefour (codul din imagine)
+Cand programul spune „Portalul Carrefour cere autentificarea”, apasa **Autentificare Carrefour** → **Autentifică-mă**. Programul incearca singur codul; daca nu reuseste, se deschide o fereastra a portalului: scrie codul din imagine si apasa *Autentificare*. Fereastra se inchide singura. Daca problema a aparut in timpul altei actiuni, dupa GATA apasa **Reia**.
 
-## 6. Codul din imagine (CAPTCHA) si sesiunea Carrefour
-Programul tine minte autentificarea. Cand portalul cere din nou codul:
-- daca **esti la calculator**, programul te intreaba „Deschid acum fereastra de autentificare?” — scrie **da**. Rezolva codul (sau bifa „nu sunt robot”) si apasa *Autentificare*. Fereastra se inchide singura si programul **continua**.
-- in **verificarea automata** (cand nu esti la calculator), programul se opreste, iti arata o notificare si scrie fisierul **ATENTIE-autentificare-Carrefour.txt** in folder. Deschide meniul si alege **5**.
+In verificarea automata (cand nu esti la calculator) programul se opreste, arata o notificare si scrie **ATENTIE-autentificare-Carrefour.txt**; pe ecranul principal apare la *Probleme deschise* cu butonul **Autentificare**. Programul nu reincearca o parola gresita (ca sa nu se blocheze contul).
 
-Programul nu reincearca o parola gresita (ca sa nu se blocheze contul).
+## 8. Verificare automată
+Arata daca verificarea la fiecare ora e **PORNITĂ** sau **OPRITĂ** si ce face in modul ales:
+- *doar ciorne*: ciorne pentru comenzile noi (de dupa configurare, cel mult 14 zile vechime), fara dubluri;
+- *automat*: prima verificare doar arata ce ar face; apoi cel mult **3 facturi** la o verificare; la orice indoiala se opreste si lasa ciorna; facturile emise apar in **FACTURI-EMISE-AUTOMAT.txt**.
 
-## 7. Daca ceva nu merge
-Orice problema afiseaza, cu rosu, o caseta **CE FACI** cu pasi numerotati si numarul din meniu de ales. Cele mai dese:
-- *alege 5* — autentificare Carrefour;
-- *alege 6* — parola schimbata, serie disparuta, configurare stricata;
-- *alege 14* — lipseste o parte din instalare (programul te intreaba si singur daca o repara);
-- *verifica internetul* si incearca din nou.
+Butoane: **Pornește** / **Oprește** si **Verifică acum, o dată**. Fiecare folder de program are propria verificare: oprirea sau pornirea intr-un folder nu o atinge pe a altui folder.
 
-**Daca nu reusesti:** alege **13 (Trimite raport la suport)**. Programul face UN singur fisier **RAPORT-SUPORT-<data>.zip** in folderul programului si deschide fereastra cu el selectat. **Trimite acest fisier lui George pe WhatsApp sau email.** Fisierul NU contine parolele tale.
+## 9. Istoric, Raport suport, Reparare
+- **Istoric**: ultimele actiuni, ciornele facute (cu id-ul din SmartBill), rularile *Ciorne în bloc* si facturile emise automat.
+- **Raport suport**: un clic face fisierul **RAPORT-SUPORT-<data>.zip** in folderul programului (FARA parole) si deschide fereastra cu el selectat (**Arată fișierul**). **Trimite-l lui George pe WhatsApp sau email.**
+- **Reparare**: descarca din nou browserul programului daca lipseste (*Repară instalarea*) si verifica instalarea.
 
-## 8. Actualizare la o versiune noua (fara sa pierzi nimic)
-1. Dezarhiveaza ZIP-ul nou langa cel vechi (poate iesi un folder „carrefour-smartbill-kit 2” — e in regula).
-2. Dublu-click pe **install** din folderul nou: preia singur conturile, setarile si jurnalul comenzilor din kitul vechi (daca nu le-a gasit, alege **8** din meniu).
-3. Daca aveai verificarea la fiecare ora, programul o muta singur pe folderul nou, iar scurtatura de pe Desktop arata spre folderul nou.
+## 10. Actualizare la o versiune noua (fara sa pierzi nimic)
+1. Dezarhiveaza ZIP-ul nou (pe Windows: intai *Deblocheaza*, vezi capitolul 1) si da dublu-click pe **install**.
+2. Deschide programul → **Configurare** → **Preia setările din kitul vechi** si confirma folderul vechi.
+3. Daca aveai verificarea la fiecare ora: opreste-o in programul vechi si porneste-o in cel nou (**Verificare automată**).
 4. Kitul vechi ramane neatins; dupa ce vezi ca totul merge, il poti sterge.
 
-## 9. Dezinstalare
-Alege **15** si scrie **da**: opreste verificarea automata si sterge scurtatura de pe Desktop. Apoi trage folderul programului in **Cos** (Mac) / **Recycle Bin** (Windows).
+## 11. Dezinstalare
+Butonul **Dezinstalare** → bifezi **Am înțeles** → **Da, dezinstalează**: opreste verificarea automata a acestui folder si sterge scurtaturile de pe Desktop. Apoi trage folderul programului in **Cos** (Mac) / **Recycle Bin** (Windows).
+
+## Meniul text (rezerva)
+Scurtatura **Carrefour SmartBill - Meniu text** deschide vechiul meniu cu numere (1–15, aceleasi actiuni): scrii numarul optiunii si apesi Enter. 2 = ciorna, 5 = autentificare, 6 = configurare, 8 = preia din kitul vechi (cu confirmare), 9 = ciorne in bloc, 11 = verificare la fiecare ora, 13 = raport suport, 14 = reparare, 15 = dezinstalare.
 
 **Atentie:** daca in SmartBill e pornita *trimiterea automata in SPV*, facturile emise pleaca singure la ANAF. Programul te avertizeaza la configurare si nu schimba aceasta setare.

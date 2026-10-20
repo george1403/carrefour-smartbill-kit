@@ -185,7 +185,7 @@ async function run({ dryRun = false } = {}) {
     cfg.smartbill.carrefourUnit = r.unit; cfg.smartbill.efactura = r.efactura && { connected: r.efactura.connected, autoSend: r.efactura.autoSend, expires: r.efactura.expires, at: new Date().toISOString() };
     wf(path.join(ROOT, 'profiles', `${name}.json`), JSON.stringify(cfg, null, 2));
     r.warnings.forEach(w => console.log('  ATENTIE: ' + w));
-  } catch (e) { console.log('  ATENTIE: nu am putut pregati SmartBill: ' + e.message.split('\n')[0] + '  (ruleaza din nou: setup)'); }
+  } catch (e) { console.log('  ATENTIE: nu am putut pregati SmartBill: ' + e.message.split('\n')[0] + '  (refa Configurarea)'); }
 
   // optional: start by itself every hour
   const sch = await prompt('\nVrei ca programul sa verifice singur comenzile noi, la fiecare ora, cat timp calculatorul e pornit? (da/nu)', { def: 'nu' });
@@ -200,8 +200,8 @@ async function run({ dryRun = false } = {}) {
   if (noAddr.length) console.log(`  ATENTIE: ${noAddr.length} magazine fara adresa in tabelul inclus (se completeaza la urmatoarea actualizare a kitului).`);
   if (RL) RL.close();
   try { fs.unlinkSync(progFile); } catch {}
-  console.log(`\nMod ales: ${mode === 'automat' ? 'AUTOMAT (emite facturi)' : 'DOAR CIORNE (tu emiti facturile din SmartBill)'}. Il schimbi oricand: run setup.`);
-  console.log('Urmatorul pas: run orders (vezi comenzile)  |  run auto (comenzile noi -> ciorne/facturi)  |  run fill <nr> (doar completeaza, nu salveaza).');
+  console.log(`\nMod ales: ${mode === 'automat' ? 'AUTOMAT (emite facturi)' : 'DOAR CIORNE (tu emiti facturile din SmartBill)'}. Il schimbi oricand: scurtatura Carrefour SmartBill de pe Desktop > Configurare.`);
+  console.log('Urmatorul pas: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop, apoi "Ciorna pentru o comanda" sau "Ciorne in bloc" (in meniul text: 2 sau 9).');
 }
 
 module.exports = { run, matchProducts, slug };
