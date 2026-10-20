@@ -1,0 +1,23 @@
+{
+  "name": "carrefour-smartbill-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Comanda Carrefour -> factura SmartBill (web), cu campurile e-Factura cerute de Carrefour. Implicit doar completare (fill-only), fara salvare.",
+  "bin": {
+    "carrefour-smartbill": "bin/kit.js"
+  },
+  "scripts": {
+    "setup": "node bin/kit.js setup",
+    "selftest": "node bin/kit.js selftest"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
+    "dotenv": "17.4.2",
+    "playwright": "1.63.0",
+    "pngjs": "7.0.0",
+    "tesseract.js": "7.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

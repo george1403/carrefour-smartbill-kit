@@ -1,0 +1,17 @@
+{
+  "_comment": "Date fixe Carrefour Romania (aceleasi pentru toti furnizorii). Producatorul NU completeaza nimic aici.",
+  "client": {
+    "name": "CARREFOUR ROMANIA SA",
+    "cif": "RO11588780",
+    "regCom": "J40/7766/2007",
+    "address": "STR. GARA HERASTRAU, GREEN COURT, CLADIREA B, ET. 4-7, SECTOR 2, NR.4C",
+    "city": "BUCURESTI",
+    "county": "Bucuresti",
+    "country": "RO"
+  },
+  "buyerGln": "5940475006709",
+  "unitName": "PCE",
+  "unitCode": "XPP",
+  "_unitNote": "Carrefour cere bucati: U.M. PCE pe factura, cod e-Factura XPP (validat: factura 48459 acceptata in SPV si recunoscuta de Carrefour). Linia poarta exact descrierea din portal (BT-153).",
+  "storesFile": "data/carrefour-stores.json"
+}

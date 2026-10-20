@@ -1,0 +1,10 @@
+node_modules/
+.env
+out/
+.runtime/
+profiles/*.json
+profiles/.default
+logs/
+*.log
+stores/
+!profiles/.gitkeep
