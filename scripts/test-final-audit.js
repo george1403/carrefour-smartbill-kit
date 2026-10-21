@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 // Final audit tests (F-series): UI texts without menu numbers, Desktop shortcuts of THIS folder only, installer texts without commands.
 const fs = require('fs'); const path = require('path'); const os = require('os'); const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..'); let ok = 0, n = 0;

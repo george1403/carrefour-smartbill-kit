@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+require('../src/testenv').strip(); // stale test hooks (mock / demo) never reach a real run or its children
 // Bundled Chromium lives in <kit>/.runtime/browsers (install.* puts it there). Run straight from a shell
 // (node bin/kit.js ...) the env var is missing and Playwright looks in ~/Library/Caches -> exit 9. Set it here.
 { const _p = require('path'), _fs = require('fs'); const _b = _p.join(__dirname, '..', '.runtime', 'browsers');

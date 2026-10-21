@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 const { rm: rmx } = require('../src/fsx'); // verified delete (Node 24 Windows: fs.rmSync is a no-op on non-ASCII paths)
 /**
  * Offline tests of mode "automat" (no SmartBill, no Carrefour, nothing issued): the SmartBill save, the XML preview,

@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 // MOD DEMONSTRATIE (incarcat cu node -r doar de kit.js ui --demo / teste): SmartBill simulat, programare simulata.
 // Nu se conecteaza la SmartBill, nu creeaza nimic real. Ciornele "create" se scriu doar in out/<profil>/drafts.json.
 if (process.env.KIT_UI_DEMO === '1') {

@@ -166,7 +166,7 @@ async function runOnce(profile, { log = console.log, mode: forced, check = false
         if (/\b403\b|Forbidden/.test(msg)) { L('SmartBill limiteaza temporar accesul (403); ma opresc si reiau la urmatoarea verificare.'); break; }
         if (require('./errors').classify(e).exit === 5) { summary.exit = 5; L('Internetul sau SmartBill nu raspunde; ma opresc si reiau la urmatoarea verificare.'); break; }
       }
-      await new Promise(r => setTimeout(r, Number(process.env.KIT_RATE_MS || 30000))); // SmartBill rate limit (tests: KIT_RATE_MS)
+      await new Promise(r => setTimeout(r, Number(require('./testenv').hook('KIT_RATE_MS') || 30000))); // SmartBill rate limit (tests: KIT_RATE_MS)
     }
   } catch (e) { const c = require('./errors').classify(e); summary.exit = summary.exit || c.exit; summary.errors.push({ error: c.message.split('\n')[0] }); L('EROARE: ' + c.message.split('\n')[0]); }
   finally {

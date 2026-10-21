@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 /**
  * Adversarial audit tests for bulk ciorne + automat (offline; no portal, no SmartBill, nothing issued).
  * Carrefour portal and fillInvoice.run are stubbed; the REAL plan()/bulkPlan()/lock()/issueNow()/ledger code runs.

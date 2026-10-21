@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 /** Siguranta instalare / programare (bugurile gasite la testele pe Mac/Windows reale, 20.10.2026). Fara retea, fara programari reale.
  * Usage: node scripts/test-install-safety.js   exit 0 = toate trecute. */
 const fs = require('fs'); const path = require('path'); const os = require('os'); const { spawnSync } = require('child_process');

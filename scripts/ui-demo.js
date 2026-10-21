@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 /**
  * MOD DEMONSTRATIE al interfetei (kit.js ui --demo): pentru teste si pentru filmarea tutorialului.
  * Portalul Carrefour = portalul simulat local (scripts/mock-portal.js), SmartBill = simulat (scripts/ui-demo-hooks.js),

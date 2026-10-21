@@ -47,7 +47,7 @@ function previewText(p) {
 }
 
 async function askYes(q) {
-  if (process.env.KIT_BULK_CONFIRM) return process.env.KIT_BULK_CONFIRM;
+  if (require('./testenv').hook('KIT_BULK_CONFIRM')) return require('./testenv').hook('KIT_BULK_CONFIRM');
   const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
   // after the answer stdin must be released: a closed readline leaves process.stdin readable+ref'd -> the process never exits (menu 9 hung after 'nu')
   const release = () => { try { process.stdin.pause(); if (typeof process.stdin.unref === 'function') process.stdin.unref(); } catch {} };
@@ -81,7 +81,7 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
     if (!pv.todo.length) { L('Nimic de facut: nu exista comenzi nefacturate fara ciorna.'); return rep; }
     const ans = String(await (confirm || askYes)(`\nCreez ${pv.todo.length} ciorne in SmartBill (in loturi de ${batch})? Scrie "da" pentru a continua: `) || '').trim().toLowerCase();
     if (ans !== 'da') { L('Nu ai confirmat cu "da": nu am creat nimic.'); rep.cancelled = true; rep.remaining = pv.todo.map(x => x.orderNo); return rep; }
-    const fi = require('./fillInvoice'); const rate = Number(process.env.KIT_RATE_MS || 30000);
+    const fi = require('./fillInvoice'); const rate = Number(require('./testenv').hook('KIT_RATE_MS') || 30000);
     let stop = null;
     for (let b = 0; b < pv.todo.length && !stop; b += batch) {
       const lot = pv.todo.slice(b, b + batch); L(`Lot ${b / batch + 1}/${Math.ceil(pv.todo.length / batch)}: ${lot.map(x => x.orderNo).join(', ')}`);

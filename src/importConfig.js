@@ -17,7 +17,7 @@ function copyTree(src, dst, stats) {
     else if (!fs.existsSync(d)) { fs.copyFileSync(s, d); stats.n++; } else stats.kept++; }
 }
 /** Only on explicit request (menu 8 / UI button), after the person confirmed the source folder by name. */
-function run({ from = null, auto = false, confirmed = process.env.KIT_IMPORT_CONFIRM === 'da' } = {}) {
+function run({ from = null, auto = false, confirmed = (process.env.KIT_TEST_MODE === '1' ? process.env.KIT_IMPORT_CONFIRM : undefined) === 'da' } = {}) {
   if (auto) return ''; // installs no longer import by themselves (they could pick up ANOTHER kit's accounts)
   if (fs.existsSync(path.join(ROOT, '.env')) && !from) return 'Acest kit are deja configurarea (.env). Nu am schimbat nimic.';
   const list = from ? [path.resolve(from)] : candidates();

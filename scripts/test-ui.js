@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 /**
  * Teste interfata grafica (kit.js ui --demo): portal Carrefour simulat local + SmartBill simulat, conturi false, folder temporar.
  * Token, Host/Origin/CSRF, niciun secret in raspunsuri, ciorne in bloc cu confirmare, lock (o actiune odata + lock-ul comun),

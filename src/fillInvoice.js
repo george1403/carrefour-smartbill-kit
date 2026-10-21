@@ -19,7 +19,7 @@ const addDays = (iso, n) => { const t = new Date(iso + 'T12:00:00'); t.setDate(t
 const rnd15 = () => { let s = String(1 + Math.floor(Math.random() * 9)); while (s.length < 15) s += Math.floor(Math.random() * 10); return s; };
 
 // Timeouts are generous for slower computers; KIT_SLOW=2 doubles them.
-const SLOW = Math.max(1, Number(process.env.KIT_SLOW || 1));
+const SLOW = Math.max(1, Number(require('./testenv').hook('KIT_SLOW') || 1));
 const T = ms => Math.round(ms * SLOW);
 // "Brasov" matches "Brașov"/"Braşov"/"BRASOV" (Romanian diacritics, both comma and cedilla forms)
 const roRe = (txt, { start = false } = {}) => new RegExp((start ? '^\\s*' : '') + String(txt).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -75,7 +75,7 @@ async function dismissNotices(page) {
 // (all pages). A Carrefour invoice whose mentions carry this order number blocks the run: issued -> duplicate,
 // cancelled -> a human decides (never re-issued automatically), draft -> finish/delete the draft first.
 /** Read the SmartBill invoice report (read-only, all pages) from fromIso to today -> Carrefour rows (text). */
-const retryWait = (t, ra) => { const base = Number(process.env.KIT_RETRY_MS || 20000); const sec = Number(ra); return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, 120000) : base * (t + 1) * 2; };
+const retryWait = (t, ra) => { const base = Number(require('./testenv').hook('KIT_RETRY_MS') || 20000); const sec = Number(ra); return Number.isFinite(sec) && sec > 0 ? Math.min(sec * 1000, 120000) : base * (t + 1) * 2; };
 async function readInvoiceReport(page, profile, cf, fromIso) {
   const from = dmy(fromIso); const to = dmy(todayIso());
   // SmartBill busy (429 = too many requests, 5xx) or slow: wait and retry (max 3 tries); still failing -> RATE/NETWORK error
@@ -451,7 +451,7 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
       throw kerr('NEEDS_HUMAN', `STOP: ciorna ${rec.invoiceId} pentru comanda ${order.orderNo} e salvata, dar verificarea finala anti-dublura nu s-a putut face (${rec.recheckError}). Ciorna NU a fost finalizata; verific-o si emite-o tu din SmartBill > Rapoarte > Facturi > Filtrare > Ciorna.`, { invoiceId: rec.invoiceId }); }
     const again = classify(againRows || await D.readReport(page, profile, JSON.parse(fs.readFileSync(path.join(profile.root, 'data', 'carrefour.json'), 'utf8')), order.orderDate && order.orderDate <= todayIso() ? addDays(order.orderDate, -1) : addDays(todayIso(), -30)), order.orderNo, profile.cfg.smartbill?.series, null);
     if (again && again.kind !== 'draft') { rec.status = 'draft-stopped'; rec.needsHuman = true; L[order.orderNo] = rec; save(); throw kerr('DUPLICATE', `STOP: intre timp a aparut in SmartBill o factura ${again.kind} pentru comanda ${order.orderNo} (${again.number || ''}); ciorna ${rec.invoiceId} NU a fost finalizata.`, { kind: again.kind }); }
-    if (process.env.KIT_STOP_BEFORE_FINAL === '1') { rec.status = 'draft-stopped'; rec.stoppedBeforeFinal = true; L[order.orderNo] = rec; save(); throw kerr('STOP_BEFORE_FINAL', `Test: oprit inainte de "Salveaza" (ciorna ${rec.invoiceId}, XML verificat).`); }
+    if (require('./testenv').hook('KIT_STOP_BEFORE_FINAL') === '1') { rec.status = 'draft-stopped'; rec.stoppedBeforeFinal = true; L[order.orderNo] = rec; save(); throw kerr('STOP_BEFORE_FINAL', `Test: oprit inainte de "Salveaza" (ciorna ${rec.invoiceId}, XML verificat).`); }
     rec.status = 'finalizing'; L[order.orderNo] = rec; save();
     try { Object.assign(rec, await D.finalizeDraft(page, s, rec.invoiceId, shot, log)); }
     catch (e) { rec.status = 'finalize-unknown'; rec.needsHuman = true; rec.finalizeError = e.message.split('\n')[0]; L[order.orderNo] = rec; save();

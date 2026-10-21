@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 // Local mock of the Carrefour supplier portal (tests only; no real portal, no real account).
 const http = require('http'); const fs = require('fs'); const path = require('path');
 function start(opts = {}) {

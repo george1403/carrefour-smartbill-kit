@@ -1,4 +1,5 @@
 'use strict';
+process.env.KIT_TEST_MODE = '1'; // test hooks (mocks, short timeouts) are honoured only in test mode
 /**
  * Audit de scalare (offline, fara conturi reale, fara SmartBill real): sute de comenzi + paginare in portal (portal SIMULAT local),
  * schimbari de pagina, SmartBill 429/5xx/timeout (pagina simulata), crash intre ciorna si finalizare, lacat dupa somn / alt calculator,
@@ -188,6 +189,64 @@ const { wf, readLedger } = require('../src/fsx');
     assert(/LOCAL_ERR=1 fail "Nu pot scrie/.test(s) && /LOCAL_ERR=1 fail "Pe disc/.test(s) && /NEED_KB=300000/.test(s), 'unix');
     const r = spawnSync('/bin/bash', ['-c', 'say(){ echo "$*"; }; ' + s.match(/fail\(\) \{[\s\S]*?\n\}/)[0] + '; LOCAL_ERR=1 fail "disc"'], { encoding: 'utf8' });
     assert(/EROARE: disc/.test(r.stdout) && !/internet/.test(r.stdout), r.stdout); if (p) assert(/-Local \}/.test(p) && /if \(-not \$Local\)/.test(p), 'ps1'); return 'fara sfat de internet'; });
+  await T('C33', 'Instalare (Mac + Windows): scurtatura de pe Desktop se face INAINTE de orice descarcare / test (un pas care cade nu mai lasa producatorul fara scurtatura)', () => {
+    for (const [f, a, b, c] of [['scripts/install-unix.sh', 'Desktop shortcuts are made FIRST', 'USE_SYSTEM=0', 'selftest'], ['install.ps1', 'Desktop shortcuts are made FIRST', '$useSystem = $false', 'selftest']]) {
+      const p = path.join(ROOT, f); if (!fs.existsSync(p)) continue; const t = fs.readFileSync(p, 'utf8');
+      assert(t.indexOf(a) > 0 && t.indexOf(a) < t.indexOf(b) && t.indexOf(b) < t.lastIndexOf(c), f + ' ordine'); assert((t.match(/CreateShortcut\(\(Join-Path|osacompile -o/g) || []).length <= 2, f + ' scurtatura dubla'); }
+    return 'scurtatura -> Node -> biblioteci -> test'; });
+  const unixInst = () => fs.readFileSync(path.join(ROOT, 'scripts', 'install-unix.sh'), 'utf8');
+  await T('C34', 'Mac: kit dezarhivat in Descarcari, folder cu SPATIU ("carrefour-smartbill-kit 3") -> copiat automat in Acasa, fara node_modules, cu nota in folderul vechi; alt kit din Acasa nu e atins', () => {
+    if (process.platform === 'win32') return 'sarit pe Windows';
+    const s = unixInst(); const blk = s.slice(s.indexOf('mac_protected() {'), s.indexOf('# Desktop shortcuts are made FIRST')).replace('exec bash "$DEST/scripts/install-unix.sh" "$@"', 'echo "EXEC=$DEST"');
+    const home = path.join(tmp, 'acasa C34'); const kit = path.join(home, 'Downloads', 'carrefour-smartbill-kit 3'); fs.mkdirSync(path.join(kit, 'node_modules', 'x'), { recursive: true }); fs.mkdirSync(path.join(kit, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(kit, 'src', 'a.js'), '1'); fs.mkdirSync(path.join(home, 'carrefour-smartbill-kit'), { recursive: true }); fs.writeFileSync(path.join(home, 'carrefour-smartbill-kit', '.env'), 'ALT=1');
+    const sh = `set -euo pipefail; say(){ echo "$*"; }; fail(){ echo "FAIL $*"; exit 1; }; PLAT=darwin; HOME="$1"; KIT_DIR="$2"; ${blk}`;
+    const r = spawnSync('/bin/bash', ['-c', sh, '_', home, kit], { encoding: 'utf8' }); const dest = path.join(home, 'carrefour-smartbill-kit 2');
+    assert(r.stdout.includes('EXEC=' + dest), r.stdout + r.stderr); assert(fs.existsSync(path.join(dest, 'src', 'a.js')) && !fs.existsSync(path.join(dest, 'node_modules')), 'copie');
+    assert(fs.readFileSync(path.join(home, 'carrefour-smartbill-kit', '.env'), 'utf8') === 'ALT=1', 'alt kit atins'); assert(/Acasa|Desktop/.test(fs.readFileSync(path.join(kit, 'PROGRAMUL-ESTE-IN-ACASA.txt'), 'utf8')), 'nota');
+    const r2 = spawnSync('/bin/bash', ['-c', sh, '_', home, kit], { encoding: 'utf8' }); assert(r2.stdout.includes('EXEC=' + dest), 'a doua oara acelasi folder: ' + r2.stdout);
+    const r3 = spawnSync('/bin/bash', ['-c', sh, '_', home, path.join(home, 'kit acasa')], { encoding: 'utf8' }); assert(!/EXEC=/.test(r3.stdout), 'din Acasa nu se muta');
+    return 'copiat in "carrefour-smartbill-kit 2" (cel existent era al altui kit)'; });
+  await T('C35', 'Mac: numele scurtaturii: a altui kit -> "Carrefour SmartBill (folder)"; a acestui kit -> refolosit; cale cu spatii', () => {
+    if (process.platform === 'win32') return 'sarit pe Windows';
+    const s = unixInst(); const fn = s.slice(s.indexOf('sc_points() {'), s.indexOf('if [ "$PLAT" = darwin ] && [ "${KIT_NO_SHORTCUT'));
+    const desk = path.join(tmp, 'desk C35'); const kit = path.join(tmp, 'kit C35', 'carrefour-smartbill-kit 3'); fs.mkdirSync(path.join(desk, 'Carrefour SmartBill.app', 'Contents', 'Resources'), { recursive: true }); fs.mkdirSync(kit, { recursive: true });
+    fs.writeFileSync(path.join(desk, 'Carrefour SmartBill.app', 'Contents', 'Resources', 'kit-dir.txt'), '/alt/kit\n');
+    const run = () => spawnSync('/bin/bash', ['-c', `DESK="$1"; KIT_DIR="$2"
+${fn}
+sc_name "Carrefour SmartBill" .app`, '_', desk, kit], { encoding: 'utf8' }).stdout;
+    assert(run() === 'Carrefour SmartBill (carrefour-smartbill-kit 3)', run());
+    fs.writeFileSync(path.join(desk, 'Carrefour SmartBill.app', 'Contents', 'Resources', 'kit-dir.txt'), kit + '\n'); assert(run() === 'Carrefour SmartBill', 'propriu: ' + run());
+    fs.rmSync(path.join(desk, 'Carrefour SmartBill.app'), { recursive: true }); assert(run() === 'Carrefour SmartBill', 'liber'); return 'ok'; });
+  await T('C36', 'Windows: Smart App Control PORNIT (registru VerifiedAndReputablePolicyState=1) -> instructiune clara in romana, oprire INAINTE de descarcari; scurtatura deja facuta', () => {
+    const p = path.join(ROOT, 'install.ps1'); if (!fs.existsSync(p)) return 'sarit (ZIP Mac)'; const t = fs.readFileSync(p, 'utf8');
+    assert(/CI\\Policy' -Name VerifiedAndReputablePolicyState/.test(t) && /\$sac -eq 1/.test(t) && /KIT_TEST_SAC/.test(t), 'detectie');
+    assert(/Securitate Windows/.test(t) && /Control aplicatii si browser > Setari Smart App Control/.test(t) && /Dezactivat/.test(t) && /resetare/.test(t), 'instructiune');
+    assert(t.indexOf('Desktop shortcuts are made FIRST') < t.indexOf('VerifiedAndReputablePolicyState') && t.indexOf('VerifiedAndReputablePolicyState') < t.indexOf('$useSystem = $false'), 'ordine'); return 'detectat + instructiuni'; });
+  await T('C37', 'Windows: scurtatura pe Desktopul REAL (si redirectat in OneDrive); run.bat arata fereastra cand instalarea nu e terminata (scurtatura porneste minimizat)', () => {
+    const p = path.join(ROOT, 'install.ps1'); if (!fs.existsSync(p)) return 'sarit (ZIP Mac)'; const t = fs.readFileSync(p, 'utf8'); const b = fs.readFileSync(path.join(ROOT, 'run.bat'), 'utf8');
+    assert(/GetFolderPath\('Desktop'\)/.test(t) && /\$env:OneDrive\) \{ Join-Path \$env:OneDrive 'Desktop'/.test(t) && /Scurtatura programului este pe Desktop/.test(t), 'desktop'); assert(!/\} catch \{\} \}/.test(t.slice(t.indexOf('Desktop shortcuts are made FIRST'), t.indexOf('Smart App Control'))), 'eroare inghitita');
+    assert(/MessageBox\]::Show\('Programul nu este instalat complet/.test(b), 'run.bat'); return 'ok'; });
+  await T('C38', 'Variabile de test RAMASE in Windows (KIT_SETUP_MOCK, KIT_CARREFOUR_DOCS_URL... mostenite de Explorer) fara KIT_TEST_MODE -> ignorate: configurarea reala NU intra in modul demo', () => {
+    const env = { ...process.env, KIT_SETUP_MOCK: path.join(tmp, 'kit-tutorial-demo', 'demo-mock.json'), KIT_CARREFOUR_DOCS_URL: 'http://127.0.0.1:9/docs', KIT_STOP_BEFORE_FINAL: '1' }; delete env.KIT_TEST_MODE;
+    const code = "const te=require('./src/testenv'); const before=te.TEST_VARS.filter(k=>k in process.env); te.strip(); const after=te.TEST_VARS.filter(k=>k in process.env); console.log(JSON.stringify({before,after,hook:te.hook('KIT_SETUP_MOCK')||null}))";
+    const r = JSON.parse(spawnSync(process.execPath, ['-e', code], { cwd: ROOT, env, encoding: 'utf8' }).stdout);
+    assert(['KIT_SETUP_MOCK','KIT_CARREFOUR_DOCS_URL','KIT_STOP_BEFORE_FINAL'].every(k => r.before.includes(k)) && r.after.length === 0 && r.hook === null, JSON.stringify(r));
+    // the real CLI: setup with the stale mock var must not try to read demo-mock.json
+    const k = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'kit.js'), 'setup'], { cwd: ROOT, env: { ...env, KIT_NO_OPEN: '1' }, input: '\n\n\n\n', encoding: 'utf8', timeout: 60000 });
+    assert(!/demo-mock|ENOENT/.test(k.stdout + k.stderr), (k.stdout + k.stderr).slice(-300));
+    const withTest = spawnSync(process.execPath, ['-e', "require('./src/testenv').strip(); console.log(process.env.KIT_SETUP_MOCK||'')"], { cwd: ROOT, env: { ...env, KIT_TEST_MODE: '1' }, encoding: 'utf8' }).stdout.trim();
+    assert(withTest.endsWith('demo-mock.json'), 'in test mode ramane: ' + withTest); return 'ignorate fara KIT_TEST_MODE; folosite doar in teste'; });
+  await T('C39', 'Kitul livrat: nicio referinta la demo/mock la rulare (src, bin, lansatoare): hook-urile de test trec DOAR prin testenv; fara .env, profile sau cai de la inregistrari', () => {
+    const files = []; const walk = d => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n); if (fs.statSync(p).isDirectory()) walk(p); else if (/\.(js|html|bat|ps1|sh|command)$/.test(n)) files.push(p); } };
+    walk(path.join(ROOT, 'src')); walk(path.join(ROOT, 'bin')); for (const f of ['run.bat', 'run.sh', 'run.command', 'install.bat', 'install.ps1', 'install.command', 'scripts/install-unix.sh', 'scripts/env-unix.sh', 'scripts/mac-ui-launch.sh']) if (fs.existsSync(path.join(ROOT, f))) files.push(path.join(ROOT, f));
+    const te = require(path.join(ROOT, 'src', 'testenv.js')); const bad = [];
+    for (const f of files) { if (f.endsWith('testenv.js')) continue; const t = fs.readFileSync(f, 'utf8');
+      if (/kit-tutorial-demo|demo-mock\.json/.test(t)) bad.push(path.relative(ROOT, f) + ': cale demo');
+      for (const l of t.split('\n')) if (/scripts\/ui-demo|mock-portal/.test(l) && !/^\s*const d = demo \? await require\('\.\.\/\.\.\/scripts\/ui-demo'\)/.test(l) && !/shippedFiles\(\)\.filter/.test(l)) bad.push(path.relative(ROOT, f) + ': demo fara --demo: ' + l.trim().slice(0, 60));
+      for (const v of te.TEST_VARS) if (t.split('\n').some(l => new RegExp('process\\.env\\.' + v + '\\b|process\\.env\\[.' + v).test(l) && !/KIT_TEST_MODE === '1'/.test(l))) bad.push(path.relative(ROOT, f) + ': ' + v + ' citit direct'); }
+    assert(!bad.length, bad.join('; ')); assert(!fs.existsSync(path.join(ROOT, '.env')) || !process.env.KIT_RELEASE_CHECK, '.env in kit');
+    return files.length + ' fisiere verificate'; });
   fi.run = realRun;
 
   const ok = results.filter(r => r.ok).length; console.log(`\n${ok}/${results.length} teste scalare trecute.`);

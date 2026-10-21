@@ -8,4 +8,6 @@ if ! command -v node >/dev/null 2>&1; then
     [ -n "$d" ] && [ -x "$d/node" ] && { export PATH="$d:$PATH"; break; }
   done
 fi
+# stale test hooks (mock/demo variables) never reach a real run
+[ "${KIT_TEST_MODE:-0}" = 1 ] || unset KIT_SETUP_MOCK KIT_CARREFOUR_DOCS_URL KIT_DEMO_MOCK_MODE KIT_STOP_BEFORE_FINAL KIT_BULK_CONFIRM KIT_IMPORT_CONFIRM KIT_RATE_MS KIT_RETRY_MS KIT_SUBMIT_WAIT KIT_NAV_TIMEOUT KIT_MANUAL_TIMEOUT_MS KIT_SLOW KIT_SUPPORT_NO_SELFTEST KIT_TEST_CLOSE_MS KIT_TEST_HEADLESS KIT_TEST_DESKTOPS KIT_TEST_DIALOG KIT_TEST_SAC
 export PLAYWRIGHT_BROWSERS_PATH="$KIT_DIR/.runtime/browsers"

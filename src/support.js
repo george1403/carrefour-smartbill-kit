@@ -84,7 +84,7 @@ function profiles(root, vals) {
   return out;
 }
 function selftestSummary(root) {
-  if (process.env.KIT_SUPPORT_NO_SELFTEST) return '(sarit)';
+  if (require('./testenv').hook('KIT_SUPPORT_NO_SELFTEST')) return '(sarit)';
   try { const r = require('child_process').spawnSync(process.execPath, [path.join(root, 'bin', 'kit.js'), 'selftest'], { encoding: 'utf8', timeout: 120000, env: { ...process.env, NO_COLOR: '1' } });
     const o = (r.stdout || '') + (r.stderr || ''); const fails = o.split('\n').filter(l => /^FAIL/.test(l)); return `cod ${r.status}, ${o.split('\n').filter(l => /^OK/.test(l)).length} OK, ${fails.length} FAIL${fails.length ? '\n' + fails.join('\n') : ''}`; } catch (e) { return 'nu a rulat: ' + e.message; }
 }

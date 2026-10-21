@@ -8,6 +8,7 @@ set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
   echo.
   echo INSTALAREA NU S-A TERMINAT ^(cod %RC%^).
+  echo Cititi mesajul EROARE de mai sus: spune exact ce e de facut.
   echo Daca fereastra s-a inchis sau nu a scris nimic: Windows a blocat fisierele descarcate.
   echo Click dreapta pe ZIP-ul descarcat ^> Proprietati ^> bifeaza "Deblocheaza" ^> OK,
   echo dezarhiveaza din nou si da dublu-click pe install.bat.

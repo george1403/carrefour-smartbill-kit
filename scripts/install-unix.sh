@@ -7,6 +7,7 @@ KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$KIT_DIR"
 NODE_VERSION="$(tr -d ' \r\n' < .node-version)"
 RT="$KIT_DIR/.runtime"
+[ "${KIT_TEST_MODE:-0}" = 1 ] || unset KIT_SETUP_MOCK KIT_CARREFOUR_DOCS_URL KIT_DEMO_MOCK_MODE KIT_STOP_BEFORE_FINAL KIT_BULK_CONFIRM KIT_IMPORT_CONFIRM KIT_RATE_MS KIT_RETRY_MS KIT_SUBMIT_WAIT KIT_NAV_TIMEOUT KIT_MANUAL_TIMEOUT_MS KIT_SLOW KIT_SUPPORT_NO_SELFTEST KIT_TEST_CLOSE_MS KIT_TEST_HEADLESS KIT_TEST_DESKTOPS KIT_TEST_DIALOG KIT_TEST_SAC   # stale test hooks never reach a real install
 say() { printf '%s\n' "$*"; }
 fail() {
   say ""; say "EROARE: $*"
@@ -29,6 +30,41 @@ FREE_KB="$(df -Pk "$KIT_DIR" 2>/dev/null | awk 'NR==2{print $4}')"
 NEED_KB=1000000; ls -d "$KIT_DIR"/.runtime/browsers/chromium* >/dev/null 2>&1 && NEED_KB=300000   # reinstall: browser already downloaded
 if [ -n "$FREE_KB" ] && [ "$FREE_KB" -lt "$NEED_KB" ] 2>/dev/null; then LOCAL_ERR=1 fail "Pe disc mai sunt doar $((FREE_KB/1024)) MB liberi; programul are nevoie de aproximativ $((NEED_KB/1000)) MB. Eliberati spatiu, apoi porniti din nou install.command."; fi
 case "$KIT_DIR" in *"/Library/Mobile Documents/"*|*"/Library/CloudStorage/"*) say "ATENTIE: folderul programului este intr-un folder sincronizat (iCloud/OneDrive/Google Drive). Sincronizarea poate bloca sau dubla jurnalele facturilor. Recomandat: mutati folderul in folderul personal (Acasa) si porniti din nou install.command." ;; esac
+# Mac: from Desktop/Documents/Downloads/iCloud macOS silently blocks the automatic check -> copy the kit to the home folder
+# (Acasa) and continue the install from there. The original folder is left untouched (only a note is added).
+mac_protected() { case "$1/" in "$HOME/Desktop/"*|"$HOME/Documents/"*|"$HOME/Downloads/"*|"$HOME/Library/Mobile Documents/"*|"$HOME/Library/CloudStorage/"*|/Volumes/*) return 0 ;; esac; return 1; }
+if [ "$PLAT" = darwin ] && [ "${KIT_NO_RELOCATE:-0}" != 1 ] && mac_protected "$KIT_DIR"; then
+  DEST="$HOME/carrefour-smartbill-kit"; n=2
+  while [ -e "$DEST" ] && [ "$(cat "$DEST/.kit-origine" 2>/dev/null)" != "$KIT_DIR" ]; do DEST="$HOME/carrefour-smartbill-kit $n"; n=$((n+1)); done
+  say ""; say "Programul este in: $KIT_DIR"
+  say "De acolo macOS nu lasa verificarea automata sa porneasca. Il copiez in folderul personal (Acasa):"
+  say "   $DEST"
+  mkdir -p "$DEST" && (cd "$KIT_DIR" && tar --exclude node_modules --exclude .runtime -cf - .) | (cd "$DEST" && tar -xf -) \
+    || LOCAL_ERR=1 fail "Nu pot copia programul in $DEST. Mutati singur folderul in folderul personal (Finder: Mergi > Acasa) si porniti din nou install.command."
+  printf '%s\n' "$KIT_DIR" > "$DEST/.kit-origine"
+  printf 'Programul a fost copiat in:\n%s\n\nFolositi scurtatura "Carrefour SmartBill" de pe Desktop.\nAcest folder nu mai este folosit si poate fi sters.\n' "$DEST" > "$KIT_DIR/PROGRAMUL-ESTE-IN-ACASA.txt" 2>/dev/null || true
+  say "Gata. Continui instalarea din folderul nou."; say ""
+  exec bash "$DEST/scripts/install-unix.sh" "$@"
+fi
+
+# Desktop shortcuts are made FIRST (before any download), so the producer always gets them; the shortcut itself explains
+# in Romanian if the install is not finished (scripts/mac-ui-launch.sh). Another kit's shortcut is never overwritten.
+DESK="${KIT_DESKTOP:-$HOME/Desktop}"; UI_APP=""; SC_MSG=""
+sc_points() { [ -e "$1" ] || return 1; grep -qsxF "$KIT_DIR" "$1/Contents/Resources/kit-dir.txt" 2>/dev/null && return 0; grep -rqaF "$KIT_DIR/" "$1" 2>/dev/null; }
+sc_name() { if [ ! -e "$DESK/$1$2" ] || sc_points "$DESK/$1$2"; then printf '%s' "$1"; return; fi
+  local t; t="$(basename "$KIT_DIR" | tr -d '()/:\\')"; printf '%s (%s)' "$1" "$t"; }
+if [ "$PLAT" = darwin ] && [ "${KIT_NO_SHORTCUT:-0}" != 1 ]; then
+  mkdir -p "$DESK" 2>/dev/null
+  UIN="$(sc_name "Carrefour SmartBill" .app)"; MNN="$(sc_name "Carrefour SmartBill - Meniu text" .command)"
+  ESC_DIR="$(printf '%s' "$KIT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  rm -rf "$DESK/$UIN.app"
+  if osacompile -o "$DESK/$UIN.app" -e "do shell script \"cd \" & quoted form of \"$ESC_DIR\" & \" && /bin/bash scripts/mac-ui-launch.sh > /dev/null 2>&1 &\"" >/dev/null 2>&1; then
+    printf '%s\n' "$KIT_DIR" > "$DESK/$UIN.app/Contents/Resources/kit-dir.txt"; rm -f "$DESK/$UIN.command"; UI_APP="$DESK/$UIN.app"
+  else SC="$DESK/$UIN.command"; printf '#!/bin/bash\nexec "%s/run.command" ui\n' "$KIT_DIR" > "$SC" && chmod +x "$SC" && UI_APP="$SC"; fi
+  SM="$DESK/$MNN.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SM" && chmod +x "$SM"
+  if [ -n "$UI_APP" ] && [ -e "$UI_APP" ]; then SC_MSG="Scurtatura programului este pe Desktop: \"$(basename "$UI_APP")\"   (folderul $DESK)"; say "$SC_MSG"
+  else say "ATENTIE: nu am putut pune scurtatura pe Desktop ($DESK). Programul se porneste si cu dublu-click pe run.command (folderul $KIT_DIR)"; fi
+fi
 USE_SYSTEM=0
 if [ "${KIT_FORCE_PORTABLE_NODE:-0}" != 1 ] && command -v node >/dev/null 2>&1; then
   MAJ="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
@@ -66,24 +102,7 @@ if [ "$PLAT" = linux ]; then
 fi
 node bin/kit.js selftest || fail "Testul de verificare a esuat."
 say "== Instalare reusita."
-# shortcuts on the Desktop (Mac): "Carrefour SmartBill" opens the graphical interface in the browser (an app, no Terminal window);
-# "Carrefour SmartBill - Meniu text" opens the old numbered menu (fallback)
-UI_APP=""
-if [ "$PLAT" = darwin ] && [ -d "$HOME/Desktop" ] && [ "${KIT_NO_SHORTCUT:-0}" != 1 ]; then
-  mkdir -p "$RT"
-  # another kit folder (another producer / an older kit) already owns "Carrefour SmartBill" -> ours gets "(folder name)"; never overwrite it
-  UIN="$(node src/shortcuts.js free-name "$HOME/Desktop" "Carrefour SmartBill" .app 2>/dev/null || echo 'Carrefour SmartBill')"
-  MNN="$(node src/shortcuts.js free-name "$HOME/Desktop" "Carrefour SmartBill - Meniu text" .command 2>/dev/null || echo 'Carrefour SmartBill - Meniu text')"
-  [ -n "$UIN" ] || UIN="Carrefour SmartBill"; [ -n "$MNN" ] || MNN="Carrefour SmartBill - Meniu text"
-  rm -rf "$HOME/Desktop/$UIN.app"
-  ESC_DIR="$(printf '%s' "$KIT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  # the app starts scripts/mac-ui-launch.sh: if the program cannot start (Node.js missing, broken install) it shows a dialog in Romanian
-  if osacompile -o "$HOME/Desktop/$UIN.app" -e "do shell script \"cd \" & quoted form of \"$ESC_DIR\" & \" && /bin/bash scripts/mac-ui-launch.sh > /dev/null 2>&1 &\"" >/dev/null 2>&1; then
-    rm -f "$HOME/Desktop/$UIN.command"; UI_APP="$HOME/Desktop/$UIN.app"
-  else SC="$HOME/Desktop/$UIN.command"; printf '#!/bin/bash\nexec "%s/run.command" ui\n' "$KIT_DIR" > "$SC" && chmod +x "$SC"; fi
-  SM="$HOME/Desktop/$MNN.command"; printf '#!/bin/bash\nexec "%s/run.command"\n' "$KIT_DIR" > "$SM" && chmod +x "$SM"
-  say "Am pus pe Desktop scurtaturile: $UIN (programul) si $MNN (rezerva)"
-fi
+[ -n "$SC_MSG" ] && say "$SC_MSG"
 if [ -f "$KIT_DIR/.env" ] && [ "${KIT_FORCE_SETUP:-0}" != 1 ]; then echo "Configurarea exista deja. Pentru a o schimba: dublu-click pe scurtatura Carrefour SmartBill de pe Desktop (sau pe run.command), apoi apasa Configurare."; exit 0; fi
 if [ "${KIT_NO_SETUP:-0}" != 1 ] && [ -n "$UI_APP" ]; then say "Se deschide programul in browser: apasa Configurare."; open "$UI_APP"; exit 0; fi
 if [ "${KIT_NO_SETUP:-0}" != 1 ]; then exec "$KIT_DIR/run.sh" setup; fi

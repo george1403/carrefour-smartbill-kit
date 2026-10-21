@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
-const DOCS_URL = process.env.KIT_CARREFOUR_DOCS_URL || 'https://apps.carrefour.ro/portal-furnizor/group/portal-furnizori/documente-furnizor'; // env: tests with a local mock only
+const DOCS_URL = require('./testenv').hook('KIT_CARREFOUR_DOCS_URL') || 'https://apps.carrefour.ro/portal-furnizor/group/portal-furnizori/documente-furnizor'; // env: tests with a local mock only
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const ask = q => new Promise(r => { const rl = readline.createInterface({ input: process.stdin, output: process.stdout }); rl.question(q, a => { rl.close(); r(a.trim()); }); });
 
@@ -81,7 +81,7 @@ const captchaVisible = async page => !!(await pageState(page)).captchaInput;
 /** Open a portal URL; network problems -> NETWORK; waits (slow portal) until the page is recognisable, else returns 'unknown'. */
 async function nav(s, url = DOCS_URL, { settleMs = 15000 } = {}) {
   let resp;
-  try { resp = await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: Number(process.env.KIT_NAV_TIMEOUT || 60000) }); }
+  try { resp = await s.page.goto(url, { waitUntil: 'domcontentloaded', timeout: Number(require('./testenv').hook('KIT_NAV_TIMEOUT') || 60000) }); }
   catch (e) { const c = classify(e); if (c.exit === EXIT.NETWORK) throw kitError('NETWORK', 'Portalul Carrefour nu raspunde: ' + c.message); throw e; }
   if (resp && resp.status() >= 500) throw kitError('NETWORK', `Portalul Carrefour nu functioneaza acum (eroare server ${resp.status()}). Incearca mai tarziu.`);
   const t0 = Date.now(); let st;
@@ -174,7 +174,7 @@ async function ensureLogin(s, profile, { log = () => {}, ocr = true } = {}) {
     if (!(await s.page.locator('#_58_login').count()) || !(await s.page.locator('#_58_fm button[type="submit"]').count())) throw kitError('LAYOUT', 'Formularul de autentificare Carrefour s-a schimbat. Nu am trimis nimic.');
     await s.page.fill('#_58_login', carrefourUser); await s.page.fill('#_58_password', carrefourPassword);
     if (code) await s.page.fill('#_58_captchaText', code);
-    await s.page.click('#_58_fm button[type="submit"]'); await delay(Number(process.env.KIT_SUBMIT_WAIT || 4000));
+    await s.page.click('#_58_fm button[type="submit"]'); await delay(Number(require('./testenv').hook('KIT_SUBMIT_WAIT') || 4000));
     const after = await pageState(s.page); const err = after.err || '';
     st = after.state === 'in' ? after : await nav(s);
     if (st.state === 'in') { s.guard.loginPhase = false; await s.save(); return code ? 'ocr' : 'parola'; }
@@ -200,11 +200,11 @@ const canAskHuman = () => process.env.KIT_UNATTENDED !== '1' && hasDisplay() && 
  * We never submit for them. Waits until the portal shows the logged-in page, saves the session, closes the window.
  * Ends with MANUAL_LOGIN if the window is closed or after timeoutMs (default 10 min). One window per call, never a loop.
  */
-async function headedLogin(profile, { timeoutMs = Number(process.env.KIT_MANUAL_TIMEOUT_MS || 10 * 60e3), log = console.log } = {}) {
+async function headedLogin(profile, { timeoutMs = Number(require('./testenv').hook('KIT_MANUAL_TIMEOUT_MS') || 10 * 60e3), log = console.log } = {}) {
   if (!hasDisplay()) throw kitError('LOGIN_NEEDED', 'Calculatorul nu are ecran pentru fereastra de autentificare. Porneste programul pe un calculator cu ecran si alege 5 (Autentificare Carrefour).');
-  const s = await open(profile, { headless: process.env.KIT_TEST_HEADLESS === '1' });
+  const s = await open(profile, { headless: require('./testenv').hook('KIT_TEST_HEADLESS') === '1' });
   let closed = false; s.browser.on('disconnected', () => { closed = true; }); s.page.on('close', () => { closed = true; });
-  if (process.env.KIT_TEST_CLOSE_MS) setTimeout(() => s.page.close().catch(() => {}), Number(process.env.KIT_TEST_CLOSE_MS)); // tests: 'window closed early'
+  if (require('./testenv').hook('KIT_TEST_CLOSE_MS')) setTimeout(() => s.page.close().catch(() => {}), Number(require('./testenv').hook('KIT_TEST_CLOSE_MS'))); // tests: 'window closed early'
   try {
     let st = await nav(s);
     if (st.state === 'in') { await s.save(); return 'deja-logat'; }

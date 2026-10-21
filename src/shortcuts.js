@@ -9,9 +9,9 @@ function desktops() {
   const d = new Set([path.join(os.homedir(), 'Desktop')]);
   if (process.platform === 'win32') {
     for (const k of ['OneDrive', 'OneDriveConsumer', 'OneDriveCommercial']) if (process.env[k]) d.add(path.join(process.env[k], 'Desktop'));
-    if (!process.env.KIT_TEST_DESKTOPS) { try { const p = require('child_process').execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Desktop')"], { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); if (p) d.add(p); } catch {} }
+    if (!require('./testenv').hook('KIT_TEST_DESKTOPS')) { try { const p = require('child_process').execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Desktop')"], { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); if (p) d.add(p); } catch {} }
   }
-  if (process.env.KIT_TEST_DESKTOPS) for (const x of process.env.KIT_TEST_DESKTOPS.split(path.delimiter)) d.add(x);
+  if (require('./testenv').hook('KIT_TEST_DESKTOPS')) for (const x of require('./testenv').hook('KIT_TEST_DESKTOPS').split(path.delimiter)) d.add(x);
   return [...d].filter(x => { try { return fs.statSync(x).isDirectory(); } catch { return false; } });
 }
 const files = p => { const st = fs.statSync(p); if (!st.isDirectory()) return [p]; const o = []; for (const n of fs.readdirSync(p)) o.push(...files(path.join(p, n))); return o; };

@@ -89,7 +89,7 @@ async function run({ dryRun = false } = {}) {
     writeEnv(envFile, vals);
     console.log('Salvat in .env (doar pe acest calculator, permisiuni 600).\n');
   } else console.log('Folosesc conturile salvate.\n');
-  const MOCK = process.env.KIT_SETUP_MOCK ? JSON.parse(fs.readFileSync(process.env.KIT_SETUP_MOCK, 'utf8')) : null; // tests only: no network
+  const MOCKF = require('./testenv').hook('KIT_SETUP_MOCK'); const MOCK = MOCKF ? JSON.parse(fs.readFileSync(MOCKF, 'utf8')) : null; // tests only (KIT_TEST_MODE=1): no network
 
   let profile = bareProfile('_setup', envFile);
   // the temporary setup session is shared by every kit on this computer: never reuse it (it may be another producer's account)
