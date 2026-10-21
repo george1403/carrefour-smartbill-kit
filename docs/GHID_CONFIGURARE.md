@@ -8,10 +8,13 @@
 
 **Incepe cu videoclipul scurt:** in folderul *Tutorial* din arhiva, priveste intai **00_PREZENTARE_RAPIDA.mp4** (2 minute). Apoi ai videoclipul de instalare pentru calculatorul tau, videoclipul lung (toate explicatiile) si acest ghid.
 
-**Unde pui folderul programului:** pe **Mac** in folderul personal (**Acasă**, Finder → Mergi → Acasă), **nu** in Desktop, Documente sau Descărcări (de acolo macOS nu lasa verificarea automata sa porneasca singura). Pe **Windows** in Documente sau in *C:\Users\numele-tau*, nu in OneDrive.
+**Unde pui folderul programului:** pe **Mac** poti porni instalarea si din Descărcări: programul se copiaza singur in folderul personal (**Acasă**) si iti spune unde. Pe **Windows** in Documente sau in *C:\Users\numele-tau*, nu in OneDrive.
+
+**Windows 11, inainte de orice:** daca **Smart App Control** este pornit, opreste-l: **Start → Securitate Windows → Control aplicatii si browser → Setari Smart App Control → Dezactivat**. Windows te avertizeaza ca nu il mai poti porni din nou fara o resetare a calculatorului: este in regula, confirma. (Instalarea verifica singura si iti spune daca a ramas pornit.)
 
 ## 1. Descarca si dezarhiveaza
 **Windows (important, altfel instalarea poate fi blocata fara niciun mesaj):**
+0. **Smart App Control → Dezactivat** (vezi mai sus), daca este pornit.
 1. Descarca **carrefour-smartbill-kit-WINDOWS.zip**.
 2. **Click dreapta pe ZIP → Proprietati**. Jos, la *Securitate*, bifeaza **Deblocheaza** → **OK**.
 3. Click dreapta pe ZIP → **Extrage tot** → **Extragere**.
@@ -19,7 +22,7 @@
 **Mac:** descarca **carrefour-smartbill-kit-MAC.zip** si da dublu-click pe el.
 
 Unde pui folderul obtinut:
-- **Mac:** in folderul personal (**Acasă**: in Finder, meniul **Mergi → Acasă**). **NU** in Desktop, Documente sau Descărcări: de acolo macOS nu lasa verificarea automata sa porneasca singura (programul te anunta daca e asa).
+- **Mac:** oriunde; daca e in Desktop, Documente sau Descărcări, instalarea il **copiaza singura in Acasă** (de acolo macOS lasa verificarea automata sa porneasca) si lasa in folderul vechi o nota. Scurtatura de pe Desktop porneste copia din Acasă.
 - **Windows:** in **Documente** (sau direct in *C:\Users\numele-tau*). Daca Documentele tale sunt in **OneDrive**, alege *C:\Users\numele-tau*: OneDrive poate bloca jurnalele facturilor (instalarea te avertizeaza).
 
 
@@ -29,10 +32,10 @@ Unde pui folderul obtinut:
 - Daca nu se intampla nimic sau scrie „INSTALAREA NU S-A TERMINAT”: ai sarit pasul *Deblocheaza* de mai sus. Sterge folderul, fa pasul 2 din capitolul 1 si dezarhiveaza din nou.
 
 **Mac:** dublu-click pe **install.command**.
-- Daca apare „nu poate fi deschis / dezvoltator neidentificat”: apasa **OK** (sau **Terminat**), deschide  → **Setari sistem** → **Confidentialitate si securitate**, coboara pana la mesajul despre *install.command* si apasa **Deschide oricum**, apoi **Deschide** (poate cere parola calculatorului).
+- **Prima data macOS il blocheaza (normal, o singura data).** Daca apare „nu poate fi deschis / dezvoltator neidentificat”: apasa **OK** (sau **Terminat**), deschide  → **Setari sistem** → **Confidentialitate si securitate**, coboara pana la mesajul despre *install.command* si apasa **Deschide oricum**, apoi **Deschide** (poate cere parola calculatorului).
 - Pe Mac-uri mai vechi merge si: click dreapta pe **install.command** → **Deschide** → **Deschide**.
 
-Programul isi descarca singur tot ce ii trebuie si scrie **Instalare reusita**. Pune pe **Desktop** doua scurtaturi:
+Primul lucru pe care il face instalarea este sa puna pe **Desktop** doua scurtaturi (si scrie in fereastra unde sunt); apoi descarca singura tot ce ii trebuie si scrie **Instalare reusita**:
 - **Carrefour SmartBill** — programul (se deschide in browser). Pe aceasta o folosesti mereu.
 - **Carrefour SmartBill - Meniu text** — vechiul meniu cu numere, doar ca rezerva.
 
