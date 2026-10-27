@@ -198,5 +198,61 @@
     "cityName": "TIMISOARA",
     "country": "RO",
     "county": "Timis"
+  },
+  "5940477601599": {
+    "name": "352 CARREFOUR IASI NICIMAN",
+    "streetName": "STR. ELENA DOAMNA",
+    "buildingNumber": "NR. 2",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940477253644": {
+    "name": "232 SUPER IASI9",
+    "streetName": "STR. INTRE RAMURI",
+    "buildingNumber": "NR. 1",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940475006129": {
+    "name": "10 IASI2",
+    "streetName": "BD. TUDOR VLADIMIRESCU",
+    "buildingNumber": "NR. 2",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940477600004": {
+    "name": "252 SUPER IASI10",
+    "streetName": "STR. PACURARI",
+    "buildingNumber": "NR. 121",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940475006099": {
+    "name": "16 IASI1",
+    "streetName": "STR. PALAT",
+    "buildingNumber": "NR. 1",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940475219079": {
+    "name": "115 SUPER IASI3",
+    "streetName": "BD. SOCOLA",
+    "buildingNumber": "NR. 2",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
+  },
+  "5940007008010": {
+    "name": "801 Iasi",
+    "streetName": "BD. CAROL I",
+    "buildingNumber": "NR. 15",
+    "cityName": "IASI",
+    "country": "RO",
+    "county": "Iasi"
   }
 }

@@ -265,6 +265,9 @@ async function run(profile, opts = {}) {
         s.guard.writeRe = /^\/nomenclator\/delivery-addresses\/[a-z_-]+\/?$/i;
         await page.locator('.modal:visible a.btn-primary', { hasText: 'Adauga' }).first().click(); await page.waitForTimeout(3500);
         s.guard.writeRe = null;
+        // Fix: Wait for modal to close completely before checking selection (issue #1 from Pofta support)
+        await page.waitForSelector('.modal:visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(1500);
         const cur = await page.inputValue('#client_delivery_address_input').catch(() => '');
         const streetKey = String(order.store.street || '').slice(0, 12);
         if (!(cur.includes(order.store.gln) || cur.includes(order.store.name) || (streetKey && cur.toUpperCase().includes(streetKey.toUpperCase())))) throw new Error(`Adresa de livrare nu s-a selectat dupa adaugare (acum: "${cur}")`);
@@ -309,6 +312,9 @@ async function run(profile, opts = {}) {
         const productCode = pcExists ? await page.inputValue('#product_code').catch(() => null) : null;
         (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: productCode, productCodeSkipped: !pcExists }); }
       else { const id = l.smartbill.id;
+        // Fix: Auto-dismiss #emitere-adaugare-um modal if it blocks #product_name click (issue #2 from Pofta support)
+        const umModal = page.locator('#emitere-adaugare-um.modal.in:visible');
+        if (await umModal.count() > 0) { await umModal.locator('button', { hasText: /Adauga|Close/ }).first().click().catch(() => {}); await page.waitForTimeout(800); }
         await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
@@ -436,19 +442,23 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   let jb = null; try { jb = JSON.parse(body || ''); } catch {}
   const m = jb && jb.id ? [null, String(jb.id)] : (after.match(/\/(?:raport|compact-view)\/factura\/(\d+)/) || (body || '').match(/factura\/(\d+)/) || []);
   const num = (info.title.match(/nr\.?\s*0*(\d+)/i) || [])[1] || null;
+  // Fix: Surface errorText from SmartBill when successfully:false (issue #3 from Pofta support)
+  const smartbillError = jb && !jb.successfully && jb.errorText ? jb.errorText : null;
   const rec = { status: jb && jb.successfully ? (jb.is_draft ? 'draft-saved' : 'issued') : 'unknown', at: new Date().toISOString(), httpStatus: resp ? resp.status() : null, invoiceId: m[1] || null, number: num, urlBefore: before, urlAfter: after,
-    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
+    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`), smartbillError };
   L[order.orderNo] = rec; save();
   rec.shot = await shot(draftOnly ? '50-ciorna-salvata' : '50-factura-emisa');
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
-  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
+  wf(path.join(path.dirname(rec.shot), 'issue-response.json'), body || '');
+  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId, smartbillError })}`);
+  const errorDetail = smartbillError ? ` SmartBill errorText: "${smartbillError}"` : '';
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}).${errorDetail} Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId, smartbillError }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {
     rec.status = rec.status === 'issued' ? 'issued-unchecked' : 'unknown'; rec.needsHuman = true; L[order.orderNo] = rec; save();
-    throw kerr('SAVE_UNKNOWN', `STOP: dupa "Spre salvare" SmartBill nu a raspuns cu o ciorna verificabila (stare ${rec.status}, id ${rec.invoiceId || '?'}). Verifica in SmartBill (Facturi si Ciorne) comanda ${order.orderNo}; nu reincerc automat.`, { invoiceId: rec.invoiceId });
+    throw kerr('SAVE_UNKNOWN', `STOP: dupa "Spre salvare" SmartBill nu a raspuns cu o ciorna verificabila (stare ${rec.status}, id ${rec.invoiceId || '?'}).${errorDetail} Verifica in SmartBill (Facturi si Ciorne) comanda ${order.orderNo}; nu reincerc automat.`, { invoiceId: rec.invoiceId, smartbillError });
   }
   if (rec.status === 'draft-saved' && rec.invoiceId) {
     // preview the e-Factura XML of the DRAFT (read-only) and stop before finalizing if order no. / GLN / names / unit are wrong
