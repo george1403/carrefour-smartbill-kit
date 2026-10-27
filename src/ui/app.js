@@ -6,7 +6,7 @@
   var $ = function (s) { return document.querySelector(s); };
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var money = function (n) { return n == null ? '?' : (Math.round(Number(n) * 100) / 100).toFixed(2).replace('.', ','); };
-  var S = { status: null, job: null, since: 0, lines: [], seenEnd: 0, last: null, after: null, form: {} };
+  var S = { status: null, job: null, since: 0, lines: [], seenEnd: 0, last: null, after: null, form: {}, qtext: '' };
   function api(method, url, body) {
     return fetch(url, { method: method, headers: Object.assign({ 'X-Kit-Token': T }, body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined, cache: 'no-store' })
       .then(function (r) { return r.json().then(function (j) { j._code = r.status; return j; }); })
@@ -47,6 +47,9 @@
   }
   function renderJob() {
     var j = S.job; var el = $('#job'); document.body.classList.toggle('busy', !!(j && j.running));
+    // Preserve current input value before re-rendering
+    var prevInput = $('#qtext');
+    if (prevInput && prevInput.id === 'qtext') S.qtext = prevInput.value;
     if (!j || (!j.running && S.dismissed === j.id)) { el.classList.add('hidden'); return; }
     el.classList.remove('hidden');
     var log = '<details' + (j.running ? ' open' : '') + '><summary>Ce face programul (detalii)</summary><div class="log" id="log">' + esc(S.lines.slice(-400).join('\n')) + '</div></details>';
@@ -75,7 +78,7 @@
     var h = '<div class="q"><p>Programul te întreabă: ' + esc(qq.text) + '</p>';
     if (qq.kind === 'yesno') h += '<button class="btn green" data-ans="da">Da</button><button class="btn grey" data-ans="nu">Nu</button>';
     else if (qq.kind === 'choice') h += qq.choices.map(function (c) { return '<button class="btn" data-ans="' + esc(c.value) + '">' + esc(c.value + ') ' + c.label) + '</button>'; }).join('<br>');
-    else h += '<div class="row"><input type="text" id="qtext" autocomplete="off"><button class="btn" data-act="answer">Trimite</button></div>';
+    else h += '<div class="row"><input type="text" id="qtext" autocomplete="off" value="' + esc(S.qtext) + '"><button class="btn" data-act="answer">Trimite</button></div>';
     return h + '</div>';
   }
   function summary(j) {
@@ -83,7 +86,7 @@
     if (j.action === 'support' && r.file) return '<p>Am făcut fișierul <b>' + esc(r.file) + '</b> (în folderul programului, FĂRĂ parole). <b>Trimite-l lui George pe WhatsApp sau email.</b></p><button class="btn green big" data-reveal="' + esc(r.file) + '">Arată fișierul</button>';
     return '';
   }
-  function answer(t) { api('POST', '/api/answer', { job: S.job.id, text: t }).then(function () { S.job.question = null; renderJob(); }); }
+  function answer(t) { api('POST', '/api/answer', { job: S.job.id, text: t }).then(function () { S.job.question = null; S.qtext = ''; renderJob(); }); }
 
   // ---------- modal ----------
   function showMsg(title, text) { var m = $('#modal'); m.innerHTML = '<div class="box"><h2>' + esc(title) + '</h2><p>' + esc(text) + '</p><button class="btn" data-act="close">Bine</button></div>'; m.classList.remove('hidden'); }

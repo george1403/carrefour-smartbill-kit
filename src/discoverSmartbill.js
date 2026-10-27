@@ -26,8 +26,9 @@ async function readInvoiceForm(page) {
       const m = o.text.match(/^(.*?)\s*\(\s*nr\.\s*(\d+)\s*\)\s*$/i);
       return { name: m ? m[1].trim() : o.text, next: m ? Number(m[2]) : null, value: o.value, selected: o.selected };
     });
+    const cifEl = document.querySelector('#company_cifs');
     return {
-      cifs: opts('#company_cifs').map(o => o.text),
+      cifs: cifEl ? opts('#company_cifs').map(o => o.text) : [],
       series,
       vat: opts('#vat_code').map(o => o.text),
       currencies: opts('#currency').map(o => o.text.split(' ')[0]),
@@ -130,6 +131,14 @@ async function discoverSmartbill(profile, { log = console.log } = {}) {
       return { name: v.find(x => /CARREFOUR/i.test(x) && !x.startsWith('{')) || null, cif: v.find(x => /^(RO)?\d{6,10}$/i.test(x) && x.includes(cfCif)) || v.find(x => /^RO\d{6,10}$/i.test(x)) || null, raw: r };
     });
     if (cl.error) out.clientsError = cl.error;
+    
+    // Fail clearly if critical lists couldn't be loaded (prevents poisoned empty profile)
+    if (prod.error && !out.products.length) {
+      throw Object.assign(new Error(`Lista de produse din SmartBill nu s-a putut citi (${prod.error}). Verifica conexiunea si incearca din nou (optiunea 12 din meniu).`), { code: 'NETWORK' });
+    }
+    if (cl.error && !out.carrefourClients.length && out.clientsTotal === 0) {
+      throw Object.assign(new Error(`Lista de clienti din SmartBill nu s-a putut citi (${cl.error}). Verifica conexiunea si incearca din nou (optiunea 12 din meniu).`), { code: 'NETWORK' });
+    }
   } finally {
     out.guard = { blocked: s.guard.blocked.map(b => `${b.method} ${b.url}`), allowedCount: s.guard.allowed.length };
     await s.browser.close();
@@ -139,4 +148,4 @@ async function discoverSmartbill(profile, { log = console.log } = {}) {
   return out;
 }
 
-module.exports = { discoverSmartbill };
+module.exports = { discoverSmartbill, _readInvoiceForm: readInvoiceForm };

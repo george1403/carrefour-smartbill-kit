@@ -55,7 +55,12 @@ async function setDate(page, prefix, iso) {
   }
   await page.keyboard.press('Escape').catch(() => {});
 }
-async function selectByText(page, sel, re) {
+async function selectByText(page, sel, re, { optional = false } = {}) {
+  const exists = await page.$(sel);
+  if (!exists) {
+    if (optional) return null;
+    throw new Error(`selectorul ${sel} nu exista`);
+  }
   const val = await page.$eval(sel, (s, src) => { const r = new RegExp(src, 'i'); const o = [...s.options].find(o => r.test(o.text.trim())); return o ? o.value : null; }, re.source);
   if (!val) { if (sel === '#vat_code') throw Object.assign(new Error(`Cota de TVA ceruta de comanda (${(re.source.match(/[\d.]+/) || ['?'])[0]}%) nu exista in SmartBill. Verifica cotele TVA in SmartBill (Configurare > Taxe) si comanda in portal.`), { code: 'NEEDS_HUMAN' });
     throw new Error(`optiunea ${re} nu exista in ${sel}`); }
@@ -180,6 +185,10 @@ async function run(profile, opts = {}) {
     despatchId: order.despatchId || rnd15(), clientCif: cf.client.cif, lines: [] };
   for (const l of order.lines) {
     const m = matchLine(l, products, pinned);
+    // Safety: EAN matched but name is completely wrong = data error, block with clear message
+    if (m && m.suspicious) {
+      throw Object.assign(new Error(m.reason), { code: 'NEEDS_HUMAN' });
+    }
     // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
     if ((!m || m.ambiguous) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
@@ -198,8 +207,12 @@ async function run(profile, opts = {}) {
     { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: dup.kind === 'unclear' ? 'NEEDS_HUMAN' : 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
     await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
 
-    // header
-    if (cfg.company?.cif) await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`));
+    // header: select company CIF (optional: single-company SmartBill accounts don't have this dropdown)
+    if (cfg.company?.cif) {
+      const cifSelected = await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`), { optional: true });
+      if (cifSelected) result.companyCifSelected = cfg.company.cif;
+      else result.companyCifSkipped = 'selector #company_cifs nu exista (cont cu o singura firma)';
+    }
     await typeAndPick(page, '#client_name', cf.client.cif.replace(/^RO/i, ''), { hasText: cf.client.cif.replace(/^RO/i, '') });
     await page.waitForTimeout(2500);
     await setDate(page, '', plan.issueDate);
@@ -252,6 +265,9 @@ async function run(profile, opts = {}) {
         s.guard.writeRe = /^\/nomenclator\/delivery-addresses\/[a-z_-]+\/?$/i;
         await page.locator('.modal:visible a.btn-primary', { hasText: 'Adauga' }).first().click(); await page.waitForTimeout(3500);
         s.guard.writeRe = null;
+        // Fix: Wait for modal to close completely before checking selection (issue #1 from Pofta support)
+        await page.waitForSelector('.modal:visible', { state: 'hidden', timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(1500);
         const cur = await page.inputValue('#client_delivery_address_input').catch(() => '');
         const streetKey = String(order.store.street || '').slice(0, 12);
         if (!(cur.includes(order.store.gln) || cur.includes(order.store.name) || (streetKey && cur.toUpperCase().includes(streetKey.toUpperCase())))) throw new Error(`Adresa de livrare nu s-a selectat dupa adaugare (acum: "${cur}")`);
@@ -261,7 +277,9 @@ async function run(profile, opts = {}) {
 
     // series (set after client/address: picking the client can reset it), then verify
     const serRe = new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`);
-    { const all = await page.$$eval('#serie option', os => os.map(o => o.text.trim()));
+    { const serieExists = await page.$('#serie');
+      if (!serieExists) throw Object.assign(new Error('Selectorul #serie nu exista pe formularul de factura SmartBill (interfata schimbata). Raporteaza aceasta eroare.'), { code: 'LAYOUT' });
+      const all = await page.$$eval('#serie option', os => os.map(o => o.text.trim()));
       if (!all.some(x => serRe.test(x))) throw Object.assign(new Error(`Seria "${plan.series}" aleasa la configurare nu mai exista in SmartBill (acum exista: ${all.map(x => x.replace(/\s*\(.*$/, '')).join(', ') || 'niciuna'}). Alege optiunea 6 (Configurare) si alege seria din nou.`), { code: 'CONFIG' }); }
     for (let i = 0; i < 3; i++) {
       await selectByText(page, '#serie', serRe); await page.locator('#serie').dispatchEvent('change'); await page.waitForTimeout(1200); await dismissNotices(page);
@@ -288,9 +306,15 @@ async function run(profile, opts = {}) {
     for (const [i, l] of plan.lines.entries()) {
       if (l.freeText) { const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 30 }); await page.waitForTimeout(T(1500)); await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
         // product not in the producer's SmartBill list: SmartBill requires a product code on the line -> use the EAN (line only, never saved to the list)
-        if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
-        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code') }); }
+        // Some SmartBill forms hide/omit #product_code for free text lines; only fill if field exists and is visible
+        const pcExists = await page.locator('#product_code').count() > 0 && await page.locator('#product_code').isVisible().catch(() => false);
+        if (pcExists && !(await page.inputValue('#product_code').catch(() => null)) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
+        const productCode = pcExists ? await page.inputValue('#product_code').catch(() => null) : null;
+        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: productCode, productCodeSkipped: !pcExists }); }
       else { const id = l.smartbill.id;
+        // Fix: Auto-dismiss #emitere-adaugare-um modal if it blocks #product_name click (issue #2 from Pofta support)
+        const umModal = page.locator('#emitere-adaugare-um.modal.in:visible');
+        if (await umModal.count() > 0) { await umModal.locator('button', { hasText: /Adauga|Close/ }).first().click().catch(() => {}); await page.waitForTimeout(800); }
         await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
@@ -320,7 +344,7 @@ async function run(profile, opts = {}) {
       if (cfg.smartbill?.carrefourLineName && l.name) {
         const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 40 }); await page.waitForTimeout(1500);
         await page.locator('#price').click(); await page.waitForTimeout(1000);
-        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
+        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code').catch(() => null), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
         if (result.afterName.name !== String(l.name)) throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name})`);
         if (cfg.smartbill?.carrefourUnit && result.afterName.um !== cfg.smartbill.carrefourUnit) throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
@@ -404,6 +428,19 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
   L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; save();
   const before = page.url();
+  // Fix: For drafts, force descarca_gestiune=false to avoid stock requirement (issue from Pofta Focului order 205987)
+  // SmartBill blocks with "Nu ai facut nicio achizitie pentru produsul... Incarca mai intai stoc... sau emite documentul fara descarcare de gestiune"
+  let descarcaGestiuneUnchecked = false;
+  if (draftOnly) {
+    const descarcaGestiune = process.env.DESCARCA_GESTIUNE === 'true' ? true : false; // default false for drafts
+    if (!descarcaGestiune) {
+      const checkbox = await page.locator('#descarca-gestiune-factura, input[name="descarca_gestiune"]').first();
+      if (await checkbox.count() > 0 && await checkbox.isVisible().catch(() => false)) {
+        const isChecked = await checkbox.isChecked().catch(() => false);
+        if (isChecked) { await checkbox.uncheck(); await page.waitForTimeout(500); descarcaGestiuneUnchecked = true; }
+      }
+    }
+  }
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
   await page.click('#saveInvoiceBtn');
@@ -418,19 +455,23 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   let jb = null; try { jb = JSON.parse(body || ''); } catch {}
   const m = jb && jb.id ? [null, String(jb.id)] : (after.match(/\/(?:raport|compact-view)\/factura\/(\d+)/) || (body || '').match(/factura\/(\d+)/) || []);
   const num = (info.title.match(/nr\.?\s*0*(\d+)/i) || [])[1] || null;
+  // Fix: Surface errorText from SmartBill when successfully:false (issue #3 from Pofta support)
+  const smartbillError = jb && !jb.successfully && jb.errorText ? jb.errorText : null;
   const rec = { status: jb && jb.successfully ? (jb.is_draft ? 'draft-saved' : 'issued') : 'unknown', at: new Date().toISOString(), httpStatus: resp ? resp.status() : null, invoiceId: m[1] || null, number: num, urlBefore: before, urlAfter: after,
-    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
+    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`), smartbillError, descarcaGestiuneUnchecked: descarcaGestiuneUnchecked || undefined };
   L[order.orderNo] = rec; save();
   rec.shot = await shot(draftOnly ? '50-ciorna-salvata' : '50-factura-emisa');
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
-  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
+  wf(path.join(path.dirname(rec.shot), 'issue-response.json'), body || '');
+  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId, smartbillError })}`);
+  const errorDetail = smartbillError ? ` SmartBill errorText: "${smartbillError}"` : '';
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}).${errorDetail} Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId, smartbillError }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {
     rec.status = rec.status === 'issued' ? 'issued-unchecked' : 'unknown'; rec.needsHuman = true; L[order.orderNo] = rec; save();
-    throw kerr('SAVE_UNKNOWN', `STOP: dupa "Spre salvare" SmartBill nu a raspuns cu o ciorna verificabila (stare ${rec.status}, id ${rec.invoiceId || '?'}). Verifica in SmartBill (Facturi si Ciorne) comanda ${order.orderNo}; nu reincerc automat.`, { invoiceId: rec.invoiceId });
+    throw kerr('SAVE_UNKNOWN', `STOP: dupa "Spre salvare" SmartBill nu a raspuns cu o ciorna verificabila (stare ${rec.status}, id ${rec.invoiceId || '?'}).${errorDetail} Verifica in SmartBill (Facturi si Ciorne) comanda ${order.orderNo}; nu reincerc automat.`, { invoiceId: rec.invoiceId, smartbillError });
   }
   if (rec.status === 'draft-saved' && rec.invoiceId) {
     // preview the e-Factura XML of the DRAFT (read-only) and stop before finalizing if order no. / GLN / names / unit are wrong
@@ -547,4 +588,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), _selectByText: selectByText, issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };

@@ -12,14 +12,22 @@ function score(line, p) {
   const name = p.Denumire || p.name || '';
   const cells = Object.values(p).map(String);
   let s = 0; const why = [];
-  const le = gtin(line.ean); if (le && cells.some(c => gtin(c) === le)) { s += 100; why.push('EAN'); }
+  const le = gtin(line.ean); 
+  const eanMatch = le && cells.some(c => gtin(c) === le);
+  if (eanMatch) { s += 100; why.push('EAN'); }
   const lt = tokens(line.name); const pt = tokens(name);
   const hit = lt.filter(t => pt.some(q => q === t || q.startsWith(t) || t.startsWith(q)));
   if (lt.length && hit.length === lt.length) { s += 40; why.push('nume'); } else s += 10 * hit.length;
   const vat = parseFloat(String(p['Cota TVA'] || p.vat || '').replace(',', '.'));
   if (line.vat != null && vat === Number(line.vat)) { s += 15; why.push(`TVA ${vat}%`); }
   if (BUNDLE.test(name)) s -= 60;
-  return { s, why };
+  
+  // Safety: EAN match but ZERO name overlap = suspicious (wrong EAN in catalog or data error)
+  // Flag it so the user verifies instead of auto-issuing the wrong product
+  const nameOverlap = lt.length > 0 && hit.length > 0;
+  const suspicious = eanMatch && !nameOverlap;
+  
+  return { s, why, suspicious };
 }
 
 function matchLine(line, products, pinned = {}) {
@@ -29,6 +37,13 @@ function matchLine(line, products, pinned = {}) {
   if (!ranked.length) return null;
   if (ranked[1] && ranked[1].s === ranked[0].s) return { ambiguous: ranked.slice(0, 4).map(r => `${r.p.id} ${r.p.Denumire} (${r.p.Cod})`) };
   const r = ranked[0];
+  
+  // Safety guard: EAN matched but product name is completely different = data error, needs human verification
+  if (r.suspicious) {
+    return { suspicious: true, eanMatch: r.p.id, smartbillName: r.p.Denumire, orderName: line.name, ean: line.ean,
+      reason: `EAN ${line.ean} gasit in SmartBill la produsul "${r.p.Denumire}" dar numele din comanda "${line.name}" nu se potriveste deloc. Verifica codul EAN in SmartBill (Nomenclatoare > Produse).` };
+  }
+  
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
