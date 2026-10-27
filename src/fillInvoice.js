@@ -55,7 +55,12 @@ async function setDate(page, prefix, iso) {
   }
   await page.keyboard.press('Escape').catch(() => {});
 }
-async function selectByText(page, sel, re) {
+async function selectByText(page, sel, re, { optional = false } = {}) {
+  const exists = await page.$(sel);
+  if (!exists) {
+    if (optional) return null;
+    throw new Error(`selectorul ${sel} nu exista`);
+  }
   const val = await page.$eval(sel, (s, src) => { const r = new RegExp(src, 'i'); const o = [...s.options].find(o => r.test(o.text.trim())); return o ? o.value : null; }, re.source);
   if (!val) { if (sel === '#vat_code') throw Object.assign(new Error(`Cota de TVA ceruta de comanda (${(re.source.match(/[\d.]+/) || ['?'])[0]}%) nu exista in SmartBill. Verifica cotele TVA in SmartBill (Configurare > Taxe) si comanda in portal.`), { code: 'NEEDS_HUMAN' });
     throw new Error(`optiunea ${re} nu exista in ${sel}`); }
@@ -198,8 +203,12 @@ async function run(profile, opts = {}) {
     { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: dup.kind === 'unclear' ? 'NEEDS_HUMAN' : 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
     await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
 
-    // header
-    if (cfg.company?.cif) await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`));
+    // header: select company CIF (optional: single-company SmartBill accounts don't have this dropdown)
+    if (cfg.company?.cif) {
+      const cifSelected = await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`), { optional: true });
+      if (cifSelected) result.companyCifSelected = cfg.company.cif;
+      else result.companyCifSkipped = 'selector #company_cifs nu exista (cont cu o singura firma)';
+    }
     await typeAndPick(page, '#client_name', cf.client.cif.replace(/^RO/i, ''), { hasText: cf.client.cif.replace(/^RO/i, '') });
     await page.waitForTimeout(2500);
     await setDate(page, '', plan.issueDate);
@@ -547,4 +556,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), _selectByText: selectByText, issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
