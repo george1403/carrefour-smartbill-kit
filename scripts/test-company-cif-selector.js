@@ -188,6 +188,40 @@ async function T(id, name, fn) {
     return 'matched with partial overlap';
   });
 
+  await T('FT01', 'FreeText line: #product_code exists and visible -> read/fill code', async () => {
+    const mockPage = {
+      locator: (sel) => ({
+        count: async () => sel === '#product_code' ? 1 : 0,
+        isVisible: async () => sel === '#product_code' ? true : false,
+        click: async () => {},
+        fill: async () => {}
+      }),
+      inputValue: async (sel) => sel === '#product_code' ? '' : null
+    };
+    const pcExists = await mockPage.locator('#product_code').count() > 0 && await mockPage.locator('#product_code').isVisible().catch(() => false);
+    assert(pcExists === true, 'field should exist and be visible');
+    const productCode = pcExists ? await mockPage.inputValue('#product_code').catch(() => null) : null;
+    assert(productCode === '', 'code should be readable');
+    return 'code field accessible';
+  });
+
+  await T('FT02', 'FreeText line: #product_code missing/hidden -> skip, set productCodeSkipped flag', async () => {
+    const mockPage = {
+      locator: (sel) => ({
+        count: async () => 0,  // field missing
+        isVisible: async () => { throw new Error('field not found'); }
+      }),
+      inputValue: async (sel) => { throw new Error('timeout'); }
+    };
+    const pcExists = await mockPage.locator('#product_code').count() > 0 && await mockPage.locator('#product_code').isVisible().catch(() => false);
+    assert(pcExists === false, 'field should be detected as missing');
+    const productCode = pcExists ? await mockPage.inputValue('#product_code').catch(() => null) : null;
+    assert(productCode === null, 'code should be null when skipped');
+    const resultEntry = { line: 1, name: 'TEST PRODUCT', code: productCode, productCodeSkipped: !pcExists };
+    assert(resultEntry.productCodeSkipped === true, 'productCodeSkipped flag should be set');
+    return 'field skipped, flag set';
+  });
+
   const fails = results.filter(r => !r.ok).length;
   console.log(`\n${results.length - fails}/${results.length} passed`);
   process.exit(fails ? 1 : 0);

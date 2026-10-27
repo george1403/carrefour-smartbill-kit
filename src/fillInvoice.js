@@ -303,8 +303,11 @@ async function run(profile, opts = {}) {
     for (const [i, l] of plan.lines.entries()) {
       if (l.freeText) { const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 30 }); await page.waitForTimeout(T(1500)); await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
         // product not in the producer's SmartBill list: SmartBill requires a product code on the line -> use the EAN (line only, never saved to the list)
-        if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
-        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code') }); }
+        // Some SmartBill forms hide/omit #product_code for free text lines; only fill if field exists and is visible
+        const pcExists = await page.locator('#product_code').count() > 0 && await page.locator('#product_code').isVisible().catch(() => false);
+        if (pcExists && !(await page.inputValue('#product_code').catch(() => null)) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
+        const productCode = pcExists ? await page.inputValue('#product_code').catch(() => null) : null;
+        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: productCode, productCodeSkipped: !pcExists }); }
       else { const id = l.smartbill.id;
         await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
       await page.fill('#quantity', String(l.qty));
@@ -335,7 +338,7 @@ async function run(profile, opts = {}) {
       if (cfg.smartbill?.carrefourLineName && l.name) {
         const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 40 }); await page.waitForTimeout(1500);
         await page.locator('#price').click(); await page.waitForTimeout(1000);
-        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
+        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code').catch(() => null), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
         if (result.afterName.name !== String(l.name)) throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name})`);
         if (cfg.smartbill?.carrefourUnit && result.afterName.um !== cfg.smartbill.carrefourUnit) throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
