@@ -428,6 +428,19 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
   L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; save();
   const before = page.url();
+  // Fix: For drafts, force descarca_gestiune=false to avoid stock requirement (issue from Pofta Focului order 205987)
+  // SmartBill blocks with "Nu ai facut nicio achizitie pentru produsul... Incarca mai intai stoc... sau emite documentul fara descarcare de gestiune"
+  let descarcaGestiuneUnchecked = false;
+  if (draftOnly) {
+    const descarcaGestiune = process.env.DESCARCA_GESTIUNE === 'true' ? true : false; // default false for drafts
+    if (!descarcaGestiune) {
+      const checkbox = await page.locator('#descarca-gestiune-factura, input[name="descarca_gestiune"]').first();
+      if (await checkbox.count() > 0 && await checkbox.isVisible().catch(() => false)) {
+        const isChecked = await checkbox.isChecked().catch(() => false);
+        if (isChecked) { await checkbox.uncheck(); await page.waitForTimeout(500); descarcaGestiuneUnchecked = true; }
+      }
+    }
+  }
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
   await page.click('#saveInvoiceBtn');
@@ -445,7 +458,7 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   // Fix: Surface errorText from SmartBill when successfully:false (issue #3 from Pofta support)
   const smartbillError = jb && !jb.successfully && jb.errorText ? jb.errorText : null;
   const rec = { status: jb && jb.successfully ? (jb.is_draft ? 'draft-saved' : 'issued') : 'unknown', at: new Date().toISOString(), httpStatus: resp ? resp.status() : null, invoiceId: m[1] || null, number: num, urlBefore: before, urlAfter: after,
-    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`), smartbillError };
+    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`), smartbillError, descarcaGestiuneUnchecked: descarcaGestiuneUnchecked || undefined };
   L[order.orderNo] = rec; save();
   rec.shot = await shot(draftOnly ? '50-ciorna-salvata' : '50-factura-emisa');
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
