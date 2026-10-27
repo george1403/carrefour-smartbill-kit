@@ -154,6 +154,40 @@ async function T(id, name, fn) {
     return 'empty CIF array (single-company account)';
   });
 
+  // Test product matching safety guard (EAN match but name mismatch)
+  const pm = require('../src/productMatch');
+  
+  await T('PM01', 'Product match: EAN matches, name matches -> valid match', async () => {
+    const line = { name: 'DULCEATA MURE 350G', ean: '6426739010129', vat: 21 };
+    const products = [
+      { id: '123', Denumire: 'Dulceata mure 350g', Cod: 'DUL001', 'Cota TVA': '21', EAN: '6426739010129' }
+    ];
+    const m = pm.matchLine(line, products);
+    assert(m && m.id === '123' && !m.suspicious, `match: ${JSON.stringify(m)}`);
+    return 'matched correctly';
+  });
+
+  await T('PM02', 'Product match: EAN matches, name COMPLETELY different -> suspicious', async () => {
+    const line = { name: 'SALATA ARDEI COPTI', ean: '6426739010365', vat: 11 };
+    const products = [
+      { id: '456', Denumire: 'Dulcegarie rubarba zmeura', Cod: 'DUL002', 'Cota TVA': '11', EAN: '6426739010365' }
+    ];
+    const m = pm.matchLine(line, products);
+    assert(m && m.suspicious, `should be suspicious: ${JSON.stringify(m)}`);
+    assert(/EAN.*gasit.*dar numele.*nu se potriveste/i.test(m.reason), `reason: ${m.reason}`);
+    return 'flagged as suspicious';
+  });
+
+  await T('PM03', 'Product match: EAN matches, partial name overlap -> valid', async () => {
+    const line = { name: 'ZACUSCA CU HRIBI 300G', ean: '6426739010013', vat: 11 };
+    const products = [
+      { id: '789', Denumire: 'Zacuscă de hribi, 300g', Cod: 'ZAC001', 'Cota TVA': '11', EAN: '6426739010013' }
+    ];
+    const m = pm.matchLine(line, products);
+    assert(m && m.id === '789' && !m.suspicious, `match: ${JSON.stringify(m)}`);
+    return 'matched with partial overlap';
+  });
+
   const fails = results.filter(r => !r.ok).length;
   console.log(`\n${results.length - fails}/${results.length} passed`);
   process.exit(fails ? 1 : 0);

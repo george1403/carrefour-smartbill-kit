@@ -185,6 +185,10 @@ async function run(profile, opts = {}) {
     despatchId: order.despatchId || rnd15(), clientCif: cf.client.cif, lines: [] };
   for (const l of order.lines) {
     const m = matchLine(l, products, pinned);
+    // Safety: EAN matched but name is completely wrong = data error, block with clear message
+    if (m && m.suspicious) {
+      throw Object.assign(new Error(m.reason), { code: 'NEEDS_HUMAN' });
+    }
     // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
     if ((!m || m.ambiguous) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
@@ -270,7 +274,9 @@ async function run(profile, opts = {}) {
 
     // series (set after client/address: picking the client can reset it), then verify
     const serRe = new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`);
-    { const all = await page.$$eval('#serie option', os => os.map(o => o.text.trim()));
+    { const serieExists = await page.$('#serie');
+      if (!serieExists) throw Object.assign(new Error('Selectorul #serie nu exista pe formularul de factura SmartBill (interfata schimbata). Raporteaza aceasta eroare.'), { code: 'LAYOUT' });
+      const all = await page.$$eval('#serie option', os => os.map(o => o.text.trim()));
       if (!all.some(x => serRe.test(x))) throw Object.assign(new Error(`Seria "${plan.series}" aleasa la configurare nu mai exista in SmartBill (acum exista: ${all.map(x => x.replace(/\s*\(.*$/, '')).join(', ') || 'niciuna'}). Alege optiunea 6 (Configurare) si alege seria din nou.`), { code: 'CONFIG' }); }
     for (let i = 0; i < 3; i++) {
       await selectByText(page, '#serie', serRe); await page.locator('#serie').dispatchEvent('change'); await page.waitForTimeout(1200); await dismissNotices(page);
