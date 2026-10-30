@@ -61,58 +61,69 @@ function softNorm(s) {
 
 /**
  * Type into product field and click the BEST autocomplete row for this stock product.
- * Does NOT require exact full-name match (fixes "menta & lamaie" / &amp; / truncated labels).
+ * SmartBill often keeps the ul in DOM with items but Playwright :visible fails (opacity/offscreen).
+ * Wait for item COUNT, then click via DOM (id / SKU / name tokens + size).
  */
 async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeout = 20000 } = {}) {
   timeout = T(timeout);
   const el = page.locator(input).first();
   await el.click(); await el.fill('');
   await el.pressSequentially(text, { delay: 35 });
-  const list = page.locator('ul.ui-autocomplete:visible li.ui-menu-item');
-  try {
-    await list.first().waitFor({ state: 'visible', timeout });
-  } catch (e) {
-    const any = await page.locator('ul.ui-autocomplete li.ui-menu-item').count().catch(() => 0);
-    throw new Error(`Dropdown lipsă după "${text}" in ${input} (waited ${timeout}ms, items=${any}). ${e.message.split('\n')[0]}`);
+  // Wait until autocomplete has any li — do NOT require Playwright :visible (fails with items>0)
+  const deadline = Date.now() + timeout;
+  let n = 0;
+  while (Date.now() < deadline) {
+    n = await page.evaluate(() => document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item').length).catch(() => 0);
+    if (n > 0) break;
+    await page.waitForTimeout(T(250));
   }
-  await page.waitForTimeout(T(400));
-  // Prefer: li#id → text contains SKU → soft-match name tokens → first item if only one
+  if (!n) throw new Error(`Dropdown lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
+  await page.waitForTimeout(T(350));
   let clicked = await page.evaluate(({ id, sku, name }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    const items = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')].filter(li => {
-      const st = getComputedStyle(li); const p = li.closest('ul');
-      return st.display !== 'none' && st.visibility !== 'hidden' && (!p || getComputedStyle(p).display !== 'none');
+    // Take ALL autocomplete lis (even if parent not "visible" to Playwright)
+    let items = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')];
+    // Prefer ones in a displayed ul; if none, use all
+    const shown = items.filter(li => {
+      const ul = li.closest('ul');
+      if (!ul) return true;
+      const st = getComputedStyle(ul);
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
     });
+    if (shown.length) items = shown;
     const texts = items.map(li => ({ id: li.id || '', text: soft(li.innerText || li.textContent || '') }));
     let hit = id && items.find(li => String(li.id) === String(id));
-    if (!hit && sku) hit = items.find(li => soft(li.innerText).includes(soft(sku)));
+    if (!hit && sku) hit = items.find(li => soft(li.id) === soft(sku) || soft(li.innerText).includes(soft(sku)));
     if (!hit && name) {
-      const toks = soft(name).replace(/[&+/]/g, ' ').split(' ').filter(t => t.length > 2 && !['furori','kombucha','ikombucha','ml','buc'].includes(t));
-      // need distinctive tokens (flavor + size)
+      const nrm = soft(name).replace(/[&+/]/g, ' ');
+      const toks = nrm.split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'si', 'cu', 'de'].includes(t));
+      const sz = (nrm.match(/\b(330|500|750|1000)\b/) || [])[1];
       hit = items.find(li => {
-        const t = soft(li.innerText);
+        const t = soft(li.innerText || li.textContent || '');
+        if (sz && !t.includes(sz)) return false;
         const need = toks.filter(x => !/^\d+$/.test(x));
-        const hitN = need.filter(x => t.includes(x)).length;
-        return hitN >= Math.min(2, need.length) && (/\b500\b/.test(soft(name)) ? t.includes('500') : !/\b500\b/.test(t) || !/\b330\b/.test(soft(name)) || t.includes('330'));
+        return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
       });
-      // size-aware: if name has 500/330, require that in label
-      if (!hit) {
-        const sz = (soft(name).match(/\b(330|500|750|1000)\b/) || [])[1];
-        hit = items.find(li => {
-          const t = soft(li.innerText);
-          if (sz && !t.includes(sz)) return false;
-          return toks.filter(x => t.includes(x)).length >= Math.min(2, toks.length);
-        });
-      }
     }
     if (!hit && items.length === 1) hit = items[0];
-    if (!hit) return { ok: false, texts: texts.slice(0, 12) };
-    hit.scrollIntoView({ block: 'nearest' });
-    hit.click();
-    return { ok: true, id: hit.id, text: soft(hit.innerText), n: items.length };
+    if (!hit) return { ok: false, texts: texts.slice(0, 15), n: items.length };
+    // jQuery UI select if available (more reliable than raw click)
+    try {
+      if (window.$ && window.$(hit).length) {
+        window.$(hit).trigger('mouseenter').click();
+      } else {
+        hit.scrollIntoView({ block: 'nearest' });
+        hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        hit.click();
+      }
+    } catch {
+      hit.click();
+    }
+    return { ok: true, id: hit.id, text: soft(hit.innerText || hit.textContent || ''), n: items.length };
   }, { id: id || null, sku: sku || null, name: name || null });
   if (!clicked || !clicked.ok) {
-    throw new Error(`Dropdown are iteme dar niciunul nu e produsul stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
+    throw new Error(`Dropdown are ${clicked && clicked.n || n} iteme dar niciunul nu e stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
   }
   await page.waitForTimeout(T(900));
   return clicked;
