@@ -144,17 +144,11 @@ async function setProductLineName(page, name) {
 /** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
 async function fillFreeTextProduct(page, l, i, result) {
   await setProductLineName(page, l.name);
-  const codeWant = String(l.ean || l.carrefourCode || '').trim();
+  const raw = String(l.ean || l.carrefourCode || '').trim();
+  const codeWant = raw ? `CF-${raw}` : '';
   if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim() && codeWant) {
-    // evaluate only — typing the code opens "Exista un produs cu acest cod...?" and can clear the field on Nu
-    await page.evaluate(v => {
-      const e = document.querySelector('#product_code');
-      if (!e) return;
-      e.value = v;
-      e.dispatchEvent(new Event('input', { bubbles: true }));
-      e.dispatchEvent(new Event('change', { bubbles: true }));
-      try { if (window.$) window.$(e).autocomplete('close'); } catch {}
-    }, codeWant);
+    // silent set — typing opens "Exista un produs cu acest cod...?" and Nu clears the field
+    await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
     await page.keyboard.press('Escape').catch(() => {});
   }
   (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback });
@@ -551,28 +545,41 @@ async function run(profile, opts = {}) {
         }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
       }
-      // SmartBill requires product_code. Answering Nu on "Exista un produs cu acest cod" CLEARS the field.
-      // Prefer a line-only code that does not match nomenclator (avoids the dialog). Set value without events right before Add.
+      // Product mapping for Carrefour:
+      //  - SmartBill/Shopify product (SKU as Cod) is what we PICK from nomenclator
+      //  - Invoice LINE gets Carrefour name (BT-153), buyer code BT-156, EAN BT-157, PCE unit
+      //  - product_code on the line = Shopify SKU when matched; CF-{ean} only for free-text (no nomenclator hit)
       await dismissBlockingDialogs(page, log);
       {
-        const raw = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || l.ean || l.carrefourCode || l.sellerCode || '').trim();
-        // Prefix CF- so SmartBill does not match an existing product and reopen the prefill dialog
-        const codeWant = raw ? (/^CF-/i.test(raw) ? raw : `CF-${raw}`) : '';
-        if (codeWant) {
-          await page.evaluate(v => {
-            const e = document.querySelector('#product_code');
-            if (!e) return;
-            e.value = v; // no input/change — avoids autocomplete + prefill dialog
-            try { if (window.$) window.$(e).autocomplete('close'); } catch {}
-          }, codeWant);
+        const shopifySku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim();
+        const matched = !!(l.smartbill && l.smartbill.id && !l.freeText);
+        const codeWant = matched && shopifySku
+          ? shopifySku
+          : (l.ean || l.carrefourCode || shopifySku || l.sellerCode
+            ? `CF-${String(l.ean || l.carrefourCode || shopifySku || l.sellerCode).trim()}`
+            : '');
+        const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+        if (codeWant && (!codeNow || (matched && shopifySku && codeNow !== shopifySku && /^CF-/i.test(codeNow)))) {
+          await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
           await page.keyboard.press('Escape').catch(() => {});
           await dismissBlockingDialogs(page, log);
-          // if Nu cleared it, set again silently
           if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
             await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
           }
-          (result.productCodeEnsured = result.productCodeEnsured || []).push({ line: i + 1, code: await page.inputValue('#product_code') });
         }
+        (result.productCodeEnsured = result.productCodeEnsured || []).push({
+          line: i + 1, code: await page.inputValue('#product_code'), shopifySku: shopifySku || null, matched, carrefourEan: l.ean || null, carrefourCode: l.carrefourCode || null,
+        });
+        (result.lineMapping = result.lineMapping || []).push({
+          line: i + 1,
+          carrefourName: l.name,
+          shopifyName: (l.smartbill && l.smartbill.name) || null,
+          shopifySku: shopifySku || null,
+          smartbillId: (l.smartbill && l.smartbill.id) || null,
+          how: (l.smartbill && l.smartbill.how) || (l.freeText ? 'free-text' : null),
+          ean: l.ean || null,
+          carrefourCode: l.carrefourCode || null,
+        });
         if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
           throw new Error(`Linia ${i + 1} (${l.name}): SmartBill cere cod produs, iar campul e gol dupa completare.`);
         }
