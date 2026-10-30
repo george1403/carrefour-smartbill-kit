@@ -163,6 +163,8 @@ function productAutocompleteItemsScript() {
 }
 
 async function closeAllAutocompletes(page) {
+  // Only jQuery close + Escape. NEVER set ul.style.display='none' — that stuck inline and
+  // made later product searches report items=0 (Mentolime 922903, SGR, Sokata fallout).
   await page.evaluate(() => {
     try {
       if (window.$) {
@@ -171,11 +173,26 @@ async function closeAllAutocompletes(page) {
         });
       }
     } catch {}
-    document.querySelectorAll('ul.ui-autocomplete').forEach(ul => {
-      ul.style.display = 'none';
-    });
   }).catch(() => {});
   await page.keyboard.press('Escape').catch(() => {});
+}
+
+/** Force jQuery UI to search after typing (SmartBill sometimes ignores pressSequentially alone). */
+async function triggerProductSearch(page, inputSel, text) {
+  await page.evaluate(({ inputSel, text }) => {
+    const e = document.querySelector(inputSel);
+    if (!e) return;
+    e.focus();
+    e.value = text;
+    e.dispatchEvent(new Event('input', { bubbles: true }));
+    e.dispatchEvent(new Event('keyup', { bubbles: true }));
+    e.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', keyCode: 40 }));
+    try {
+      if (window.$ && window.$(e).data('ui-autocomplete')) {
+        window.$(e).autocomplete('search', text);
+      }
+    } catch {}
+  }, { inputSel, text });
 }
 
 /**
@@ -187,33 +204,35 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
   timeout = T(timeout);
   await closeAllAutocompletes(page);
   const el = page.locator(input).first();
-  await el.click(); await el.fill('');
-  await el.pressSequentially(text, { delay: 35 });
+  await el.click({ timeout: T(5000) });
+  await el.fill('');
+  await el.pressSequentially(text, { delay: 40 });
+  await triggerProductSearch(page, input, text);
   const deadline = Date.now() + timeout;
   let n = 0;
   const countForField = async () => page.evaluate(({ inputSel }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim().toLowerCase();
     const noise = t => {
       const x = soft(t);
-      return !x || /^adauga client|carrefour romania|garantie sgr|sgr plastic|sgr sticla/.test(x)
-        || /^(pce|xpp|buc|kg|lei|ron)$/.test(x) || /^0160\b|gtin|global trade item/.test(x);
+      return !x || /^adauga client|client-add-new/.test(x) || /^carrefour romania\b/.test(x)
+        || /^(pce|xpp|buc|kg|lei|ron)$/.test(x) || /^0160\b|gtin\s*-|global trade item/.test(x);
     };
     const shown = (ul) => {
       if (!ul) return false;
       const st = getComputedStyle(ul);
-      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0
-        && ul.getClientRects().length > 0;
+      // accept opacity>0 even if off-screen (getClientRects can be 0 while menu is open)
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
     };
     const inputEl = document.querySelector(inputSel);
     try {
       if (inputEl && window.$ && window.$(inputEl).data('ui-autocomplete')) {
         const w = window.$(inputEl).autocomplete('widget')[0];
-        if (w && shown(w)) {
-          return [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || '')).length;
+        if (w) {
+          const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || ''));
+          if (lis.length && (shown(w) || w.classList.contains('ui-autocomplete'))) return lis.length;
         }
       }
     } catch {}
-    // visible non-noise menus only (avoid counting client leftover as "ready")
     let best = 0;
     for (const ul of document.querySelectorAll('ul.ui-autocomplete')) {
       if (!shown(ul)) continue;
@@ -221,12 +240,20 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
       if (lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))) continue;
       best = Math.max(best, lis.length);
     }
+    // last resort: any li with numeric stock id in DOM (even if parent display quirky)
+    if (!best) {
+      const any = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+        .filter(li => li.id && /^\d{5,}$/.test(String(li.id)) && !noise(li.innerText || ''));
+      best = any.length;
+    }
     return best;
   }, { inputSel: input }).catch(() => 0);
 
   while (Date.now() < deadline) {
     n = await countForField();
     if (n > 0) break;
+    // re-nudge search halfway
+    if (Date.now() > deadline - timeout / 2) await triggerProductSearch(page, input, text).catch(() => {});
     await page.waitForTimeout(T(250));
   }
   if (!n) throw new Error(`Dropdown produs lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
@@ -349,6 +376,12 @@ async function pickExistingProduct(page, l, log) {
   if (sku) {
     attempts.push({ field: '#product_name', text: sku });
     attempts.push({ field: '#product_code', text: sku });
+    // SGR services: "SGR sticla" / "SGR plastic" — also try short token SmartBill indexes well
+    if (/^sgr\b/i.test(sku)) {
+      const short = sku.replace(/^sgr\s+/i, '').trim(); // sticla / plastic
+      if (short) attempts.push({ field: '#product_name', text: `SGR ${short}` });
+      attempts.push({ field: '#product_name', text: 'SGR' });
+    }
     // Furori codes: sokataF500 — also try without the F and with space before size
     const m = sku.match(/^([a-z]+)F?(\d{3,4})$/i);
     if (m) {
@@ -357,17 +390,22 @@ async function pickExistingProduct(page, l, log) {
     }
   }
   if (name) {
-    // "menta & lamaie 500" / "sokata 500" / "SGR plastic"
-    const toks = softNorm(name).replace(/[&+/]/g, ' ').split(' ').filter(Boolean);
+    // Keep "&" — SmartBill indexes "menta & lamaie"; stripping it caused Mentolime items=0.
+    const toks = softNorm(name).split(' ').filter(Boolean);
     const sz = (toks.find(t => /^(330|500|750)$/.test(t)) || '');
-    const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', sz].includes(t) && !/^\d+$/.test(t));
+    const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', '&', sz].includes(t) && !/^\d+$/.test(t));
+    // Prefer distinctive mid-name: "menta & lamaie 500" / "sokata 500"
+    if (flavor.length >= 2 && sz) {
+      attempts.push({ field: '#product_name', text: `${flavor[0]} & ${flavor[1]} ${sz}` });
+      attempts.push({ field: '#product_name', text: `${flavor[0]} ${flavor[1]} ${sz}` });
+    }
     if (flavor.length && sz) attempts.push({ field: '#product_name', text: `${flavor.slice(0, 2).join(' ')} ${sz}` });
     if (flavor.length === 1 && sz) attempts.push({ field: '#product_name', text: `${flavor[0]} ${sz}` });
     if (flavor.length >= 2) attempts.push({ field: '#product_name', text: flavor.slice(0, 3).join(' ') });
-    // last: first 3 words without &
-    const words = name.replace(/&/g, ' ').split(/\s+/).filter(w => w && w !== '&');
-    attempts.push({ field: '#product_name', text: words.slice(0, 3).join(' ') });
-    attempts.push({ field: '#product_name', text: words.slice(0, 5).join(' ') });
+    // Keep original & spelling as last resorts
+    const withAmp = name.replace(/\s+/g, ' ').trim();
+    attempts.push({ field: '#product_name', text: withAmp.split(/\s+/).slice(0, 5).join(' ') });
+    attempts.push({ field: '#product_name', text: withAmp.split(/\s+/).slice(0, 7).join(' ') });
   }
 
   let lastErr;
