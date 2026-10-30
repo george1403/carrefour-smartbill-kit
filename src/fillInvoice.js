@@ -67,7 +67,8 @@ function gtinLike(s) {
 }
 
 /** Carrefour already sends SGR deposit as its own 0% line (GARANTIE PET/STICLA/SGR).
- *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line). */
+ *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line).
+ *  Use their EXISTING services: "Garantie SGR Plastic" (SGR plastic) / "Garantie SGR Sticla" (SGR sticla). */
 function isSgrDepositLine(l) {
   if (Number(l.vat) !== 0) return false;
   return /GARANTIE|SGR|\bPET\b|\bSTICLA\b|\bSTICL[AĂ]\b/i.test(String(l.name || '') + ' ' + String(l.carrefourCode || '') + ' ' + String(l.ean || ''));
@@ -413,10 +414,17 @@ async function run(profile, opts = {}) {
     despatchId: order.despatchId || rnd15(), clientCif: cf.client.cif, lines: [] };
   for (const l of order.lines) {
     const m = matchLine(l, products, pinned);
+    // SGR must resolve to existing services SGR plastic / SGR sticla — never invent a new GARANTIE line
+    if (isSgrDepositLine(l) && (!m || m.ambiguous)) {
+      throw Object.assign(new Error(
+        `Linia SGR "${l.name}" (EAN ${l.ean}): trebuie serviciul existent „Garantie SGR Plastic” (cod SGR plastic) sau „Garantie SGR Sticla” (cod SGR sticla). Nu creez produs nou.`
+      ), { code: 'NEEDS_HUMAN' });
+    }
     // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
-    if ((!m || m.ambiguous) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
+    // SGR is never free-text — only real drink SKUs may free-text-fallback when unmatched (rare)
+    if ((!m || m.ambiguous) && !isSgrDepositLine(l) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
-    plan.lines.push({ ...l, smartbill: m });
+    plan.lines.push({ ...l, smartbill: m, _sgrService: isSgrDepositLine(l) });
   }
   // automat/--issue: a line without a SmartBill product is never ISSUED unattended (free text needs a person's eye); drafts are fine
   if (opts.issue && !draftOnly && plan.lines.some(l => l.freeText) && !cfg.auto?.allowFreeText)
@@ -523,13 +531,12 @@ async function run(profile, opts = {}) {
     if (order.deliveryDate) { if (!(await page.isChecked('#deliveryDateCB'))) await page.check('#deliveryDateCB'); await setDate(page, 'delivery', order.deliveryDate); }
 
     // lines
-    // Always pick EXISTING Shopify/SmartBill products by SKU when matched.
-    // Free-text only if there is truly no match (SGR edge). Never CF-* codes (those created junk products).
+    // Drinks: pick EXISTING Shopify/SmartBill stock by SKU.
+    // SGR: pick EXISTING services "Garantie SGR Plastic" / "Garantie SGR Sticla" (Tip=serviciu). Never invent.
     for (const [i, l] of plan.lines.entries()) {
-      const sgrLine = isSgrDepositLine(l);
+      const sgrLine = isSgrDepositLine(l) || !!l._sgrService;
       await dismissBlockingDialogs(page, log);
-      if (l.freeText || !l.smartbill || !l.smartbill.id) {
-        if (sgrLine) l._sgrFreeTextFallback = true;
+      if (!sgrLine && (l.freeText || !l.smartbill || !l.smartbill.id)) {
         l.freeText = true;
         await fillFreeTextProduct(page, l, i, result);
         await dismissBlockingDialogs(page, log);
