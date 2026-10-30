@@ -221,6 +221,29 @@ async function dismissNotices(page) {
   }
 }
 
+/** Close SmartBill blocking dialogs that intercept clicks (product-code prefill, nomenclator, info).
+ *  Prefill "Exista un produs cu acest cod..." -> Nu: keep Carrefour typed line (name/VAT/SGR), never pull nomenclator SGR auto. */
+async function dismissBlockingDialogs(page, log = () => {}) {
+  for (let i = 0; i < 5; i++) {
+    const wrap = page.locator('.ui-dialog-wrapper.visible, .ui-dialog:visible, .modal.in, .modal.show, .swal2-popup:visible').first();
+    if (!(await wrap.count().catch(() => 0)) || !(await wrap.isVisible().catch(() => false))) return;
+    const text = ((await wrap.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    // product exists with this code -> prefill? Always Nu for Carrefour free-text / SGR path
+    if (/Exista un produs cu acest cod|precompletarea datelor/i.test(text)) {
+      const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
+      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); log('Dialog precompletare produs: Nu'); continue; }
+    }
+    if (/Introducere in nomenclator/i.test(text)) {
+      const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
+      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); continue; }
+    }
+    const ok = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*(OK|Am inteles|Inchide|Nu)\s*$/i }).first();
+    if (await ok.count() && await ok.isVisible().catch(() => false)) { await ok.click().catch(() => {}); await page.waitForTimeout(T(700)); continue; }
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(T(400));
+  }
+}
+
 // Duplicate check, fail-closed. Local ledgers first, then the SmartBill invoice report from the order date to today
 // (all pages). A Carrefour invoice whose mentions carry this order number blocks the run: issued -> duplicate,
 // cancelled -> a human decides (never re-issued automatically), draft -> finish/delete the draft first.
@@ -472,6 +495,7 @@ async function run(profile, opts = {}) {
       await bt156.fill(String(l.carrefourCode || ''));
       await page.fill('#id-product-additional-field-standardItemIdentifier', String(l.ean || ''));
       if (l.ean) await typeAndPick(page, '#id-product-additional-field-standardItemIdentifierTypeId', '0160', { hasText: '0160' }).catch(e => log('tip EAN: ' + e.message.split('\n')[0]));
+      await dismissBlockingDialogs(page, log); // e.g. "Exista un produs cu acest cod...?" after code/EAN
       result.lineDescription = result.lineDescription || [];
       // BT-154 item description = Carrefour product name (line only; the product itself is not renamed)
       try {
@@ -480,10 +504,11 @@ async function run(profile, opts = {}) {
         result.lineDescription.push({ line: i + 1, before, now: await page.inputValue('#product_description') });
       } catch (e) { result.lineDescription.push({ line: i + 1, error: e.message.split('\n')[0] }); }
       // Carrefour-only unit (mapped to UNECE XPP in SmartBill; "buc" stays H87 for everybody else)
+      await dismissBlockingDialogs(page, log);
       if (cfg.smartbill?.carrefourUnit) { const v = await setField(page, '#measuring_unit', cfg.smartbill.carrefourUnit, { blurTo: '#quantity' });
-        if (v !== cfg.smartbill.carrefourUnit) throw new Error(`U.M. nu s-a putut seta: este "${v}", trebuia "${cfg.smartbill.carrefourUnit}"`); }
+        if (!sameCarrefourUnit(v, cfg.smartbill.carrefourUnit)) throw new Error(`U.M. nu s-a putut seta: este "${v}", trebuia "${cfg.smartbill.carrefourUnit}"`); }
       // supplier item code (BT-155) only when explicitly enabled; never saved to the product list (see nomenclature gate)
-      if (cfg.smartbill?.useOrderSellerCode && l.sellerCode) { const pc = page.locator('#product_code'); await pc.click(); await pc.fill(''); await pc.pressSequentially(String(l.sellerCode), { delay: 60 }); await page.waitForTimeout(1500); await page.locator('#price').click(); await page.waitForTimeout(800);
+      if (cfg.smartbill?.useOrderSellerCode && l.sellerCode) { const pc = page.locator('#product_code'); await pc.click(); await pc.fill(''); await pc.pressSequentially(String(l.sellerCode), { delay: 60 }); await page.waitForTimeout(1500); await dismissBlockingDialogs(page, log); await page.locator('#price').click(); await page.waitForTimeout(800);
         result.afterCode = { code: await pc.inputValue(), name: await page.inputValue('#product_name'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), desc: await page.inputValue('#product_description').catch(() => null),
           dialogs: await page.evaluate(() => [...document.querySelectorAll('.modal, .ui-dialog')].filter(m => m.offsetParent || getComputedStyle(m).display === 'block').map(m => m.innerText.replace(/\s+/g, ' ').trim().slice(0, 200))) }; }
       // BT-153 line name = Carrefour description, typed over the picked product's name ON THIS LINE ONLY.
