@@ -60,6 +60,11 @@ function sameCarrefourUnit(a, b) {
   if (aa === bb) return true;
   return piece.has(aa) && piece.has(bb);
 }
+/** Digits-only GTIN/EAN-looking product codes (8–14) — never invent these as new Cod. */
+function gtinLike(s) {
+  const d = String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+  return d.length >= 8 && d.length <= 14 && d === String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+}
 
 /** Carrefour already sends SGR deposit as its own 0% line (GARANTIE PET/STICLA/SGR).
  *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line). */
@@ -141,17 +146,47 @@ async function setProductLineName(page, name) {
   return (await page.inputValue('#product_name').catch(() => '')) || '';
 }
 
-/** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
+/**
+ * Pick an EXISTING SmartBill/Shopify product by SKU first (unique), then by denumire.
+ * Never invents CF-* codes. Throws if the nomenclator row cannot be selected.
+ */
+async function pickExistingProduct(page, l, log) {
+  const id = String(l.smartbill.id);
+  const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
+  const name = String(l.smartbill.name || l.smartbill.Denumire || '').trim();
+  const attempts = [];
+  if (sku) attempts.push({ field: '#product_name', text: sku });
+  if (sku) attempts.push({ field: '#product_code', text: sku });
+  if (name) {
+    const short = name.split(/\s+/).slice(0, 5).join(' ');
+    if (short && short !== sku) attempts.push({ field: '#product_name', text: short });
+    if (name !== short && name !== sku) attempts.push({ field: '#product_name', text: name });
+  }
+  let lastErr;
+  for (const a of attempts) {
+    try {
+      await page.keyboard.press('Escape').catch(() => {});
+      await dismissBlockingDialogs(page, log);
+      await typeAndPick(page, a.field, a.text, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: 18000 });
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via ${a.field}="${a.text}"`);
+      return a;
+    } catch (e) {
+      lastErr = e;
+      log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
+      await page.keyboard.press('Escape').catch(() => {});
+      await dismissBlockingDialogs(page, log);
+    }
+  }
+  throw lastErr || new Error(`Nu am putut selecta produsul SmartBill id ${id} (${sku || name})`);
+}
+
+/** True free-text ONLY when no Shopify match exists (e.g. rare SGR). No CF-* codes — those created junk products. */
 async function fillFreeTextProduct(page, l, i, result) {
   await setProductLineName(page, l.name);
-  const raw = String(l.ean || l.carrefourCode || '').trim();
-  const codeWant = raw ? `CF-${raw}` : '';
-  if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim() && codeWant) {
-    // silent set — typing opens "Exista un produs cu acest cod...?" and Nu clears the field
-    await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
-    await page.keyboard.press('Escape').catch(() => {});
-  }
-  (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback });
+  // Leave #product_code empty or keep whatever SmartBill set — never invent CF-{ean}/EAN codes.
+  (result.freeTextLines = result.freeTextLines || []).push({
+    line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback,
+  });
 }
 async function setDate(page, prefix, iso) {
   const { d, m, y } = dmy(iso);
@@ -466,32 +501,28 @@ async function run(profile, opts = {}) {
     if (order.deliveryDate) { if (!(await page.isChecked('#deliveryDateCB'))) await page.check('#deliveryDateCB'); await setDate(page, 'delivery', order.deliveryDate); }
 
     // lines
-    // SGR deposit lines (GARANTIE PET/STICLA at 0%): Carrefour already sent them. Prefer pick from nomenclator;
-    // if autocomplete times out, fall back to free-text + cota "0 % - SGR". Never enable SmartBill auto-SGR.
+    // Always pick EXISTING Shopify/SmartBill products by SKU when matched.
+    // Free-text only if there is truly no match (SGR edge). Never CF-* codes (those created junk products).
     for (const [i, l] of plan.lines.entries()) {
       const sgrLine = isSgrDepositLine(l);
       await dismissBlockingDialogs(page, log);
-      if (l.freeText) {
+      if (l.freeText || !l.smartbill || !l.smartbill.id) {
+        if (sgrLine) l._sgrFreeTextFallback = true;
+        l.freeText = true;
         await fillFreeTextProduct(page, l, i, result);
         await dismissBlockingDialogs(page, log);
       } else {
-        const id = l.smartbill.id;
-        // Prefer Shopify denumire for autocomplete; Carrefour name is applied later via carrefourLineName
-        const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 5).join(' ');
-        const pickTimeout = 8000; // fail fast -> free-text (Carrefour line); do not hang bulk
         try {
-          await typeAndPick(page, '#product_name', pickText, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: pickTimeout });
+          const used = await pickExistingProduct(page, l, log);
+          l._pickedExisting = true;
+          (result.pickedExisting = result.pickedExisting || []).push({
+            line: i + 1, name: l.name, smartbillId: l.smartbill.id, shopifySku: l.smartbill.code || l.smartbill.Cod || null, via: used,
+          });
         } catch (pickErr) {
-          // Matched in discovered list but autocomplete missing/slow (common): invoice as free-text Carrefour line.
-          // Does NOT create/rename nomenclator products (add_product=false later).
-          log(`Linie ${i + 1} (${l.name}): autocomplete fail pe produs SmartBill id ${id} "${pickText}" -> free-text Carrefour. (${String(pickErr.message || pickErr).split('\n')[0]})`);
-          await page.keyboard.press('Escape').catch(() => {});
-          if (sgrLine) l._sgrFreeTextFallback = true;
-          l._pickFreeTextFallback = true;
-          l.freeText = true;
-          await fillFreeTextProduct(page, l, i, result);
-          await dismissBlockingDialogs(page, log);
-          (result.pickFreeTextFallback = result.pickFreeTextFallback || []).push({ line: i + 1, name: l.name, smartbillId: id, pickText, reason: String(pickErr.message || pickErr).split('\n')[0] });
+          // Do NOT invent a new product. Fail this order so a human picks the real Shopify SKU.
+          throw Object.assign(new Error(
+            `Comanda ${order.orderNo} linia ${i + 1} (${l.name}): am gasit produsul Shopify in lista (id ${l.smartbill.id}, cod ${l.smartbill.code || l.smartbill.Cod || '?'}) dar SmartBill autocomplete nu l-a selectat. Reincearca (opt. 2) sau alege manual produsul cu SKU-ul Shopify. Detaliu: ${String(pickErr.message || pickErr).split('\n')[0]}`
+          ), { code: 'NEEDS_HUMAN' });
         }
         await dismissBlockingDialogs(page, log);
       }
@@ -550,26 +581,24 @@ async function run(profile, opts = {}) {
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
       }
       // Product mapping for Carrefour:
-      //  - SmartBill/Shopify product (SKU as Cod) is what we PICK from nomenclator
+      //  - PICK existing SmartBill/Shopify product (SKU as Cod)
       //  - Invoice LINE gets Carrefour name (BT-153), buyer code BT-156, EAN BT-157, PCE unit
-      //  - product_code on the line = Shopify SKU when matched; CF-{ean} only for free-text (no nomenclator hit)
+      //  - product_code stays the Shopify SKU — never CF-{ean} (that created junk nomenclator rows)
       await dismissBlockingDialogs(page, log);
       {
         const shopifySku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim();
-        const matched = !!(l.smartbill && l.smartbill.id && !l.freeText);
-        const codeWant = matched && shopifySku
-          ? shopifySku
-          : (l.ean || l.carrefourCode || shopifySku || l.sellerCode
-            ? `CF-${String(l.ean || l.carrefourCode || shopifySku || l.sellerCode).trim()}`
-            : '');
+        const matched = !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText);
+        const codeWant = matched && shopifySku ? shopifySku : '';
         const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
-        if (codeWant && (!codeNow || (matched && shopifySku && codeNow !== shopifySku && /^CF-/i.test(codeNow)))) {
-          await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
+        // Strip accidental CF-/EAN codes; restore Shopify SKU after pick
+        if (matched && shopifySku && (codeNow !== shopifySku || /^CF-/i.test(codeNow) || (gtinLike(codeNow) && codeNow !== shopifySku))) {
+          await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, shopifySku);
           await page.keyboard.press('Escape').catch(() => {});
           await dismissBlockingDialogs(page, log);
-          if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
-            await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
-          }
+        } else if (!matched && /^CF-/i.test(codeNow)) {
+          // free-text: clear CF junk code so SmartBill does not offer "Introducere in nomenclator"
+          await page.evaluate(() => { const e = document.querySelector('#product_code'); if (e) e.value = ''; });
+          await page.keyboard.press('Escape').catch(() => {});
         }
         (result.productCodeEnsured = result.productCodeEnsured || []).push({
           line: i + 1, code: await page.inputValue('#product_code'), shopifySku: shopifySku || null, matched, carrefourEan: l.ean || null, carrefourCode: l.carrefourCode || null,
@@ -583,9 +612,10 @@ async function run(profile, opts = {}) {
           how: (l.smartbill && l.smartbill.how) || (l.freeText ? 'free-text' : null),
           ean: l.ean || null,
           carrefourCode: l.carrefourCode || null,
+          pickedExisting: !!l._pickedExisting,
         });
-        if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
-          throw new Error(`Linia ${i + 1} (${l.name}): SmartBill cere cod produs, iar campul e gol dupa completare.`);
+        if (matched && !((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
+          throw new Error(`Linia ${i + 1} (${l.name}): dupa pick, codul Shopify SKU e gol — opresc ca sa nu creez produs nou.`);
         }
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
@@ -616,16 +646,36 @@ async function run(profile, opts = {}) {
       const ask = page.locator('.ui-dialog:visible').filter({ hasText: /Introducere in nomenclator/i });
       if (await ask.count()) { await ask.locator('button', { hasText: /^\s*Nu\s*$/ }).first().click(); await page.waitForTimeout(1200); (result.nomenclatorDialog = result.nomenclatorDialog || []).push({ line: i + 1, answered: 'Nu' }); }
     }
-    // Same effect as answering "Nu" to SmartBill's "Doresti sa salvezi produsul in Nomenclator?": the line is invoiced as typed
-    // (Carrefour unit / description / code) and is NEVER written to the product list (add_product=false, no product id).
-    result.lineNomenclator = await page.evaluate(() => (window.products || []).map(p => { const was = { id: p.id, add_product: p.add_product }; if (!p.is_discount) { p.add_product = false; p.id = null; } return was; }));
+    // Never create/rename nomenclator products (add_product=false always).
+    // Re-attach Shopify product id + SKU after Carrefour line rename (SmartBill clears id when name changes).
+    // Free-text lines (no match) stay id=null with empty/non-CF code.
+    const keepPayload = plan.lines.map(l => ({
+      keep: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText),
+      id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
+      sku: String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null,
+    }));
+    result.lineNomenclator = await page.evaluate((payload) => (window.products || []).map((p, i) => {
+      const was = { id: p.id, add_product: p.add_product, code: p.product_code };
+      if (!p.is_discount) {
+        p.add_product = false;
+        const row = payload[i] || {};
+        if (row.keep && row.id) {
+          p.id = row.id;
+          if (row.sku) p.product_code = row.sku;
+        } else {
+          p.id = null;
+          if (/^CF-/i.test(String(p.product_code || ''))) p.product_code = '';
+        }
+      }
+      return was;
+    }), keepPayload);
     if (cfg.smartbill?.carrefourLineName) { const names = await page.evaluate(() => (window.products || []).map(p => p.product_name));
       plan.lines.forEach((l, i) => { if (names[i] !== l.name) throw new Error(`STOP: linia ${i + 1} are numele "${names[i]}" in loc de "${l.name}"`); }); }
-    // nomenclature gate: no line may be saved into the product list with changed data
+    // nomenclature gate: add_product must stay false; matched lines should keep Shopify id when possible
     result.lineState = await page.evaluate(() => (window.products || []).map(p => ({ name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description })));
     for (const [i, st] of result.lineState.entries()) {
-      const nom = plan.lines[i]?.smartbill || {}; const nomUm = nom['U.M.'] || 'buc'; const nomCode = nom.Cod ?? nom.code;
-      if (st.add_product && (!st.id || st.um !== nomUm || (nomCode != null && String(st.code) !== String(nomCode)))) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
+      if (st.add_product) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
+      if (/^CF-/i.test(String(st.code || ''))) throw new Error(`STOP: linia ${i + 1} are cod CF-* (${st.code}) — ar crea produs nou. Foloseste SKU Shopify.`);
     }
     result.seriesAtEnd = await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
     if (!new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(result.seriesAtEnd || '')) throw new Error(`Seria s-a schimbat in ${result.seriesAtEnd}`);
