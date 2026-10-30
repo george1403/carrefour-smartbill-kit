@@ -61,104 +61,119 @@ function softNorm(s) {
 
 /**
  * Collect product autocomplete rows for ONE input only.
- * Bug 30.10.2026 (Sokata 206008): querying ALL ul.ui-autocomplete on the page mixed in
- * leftover client / SGR / unit / GTIN menus → "6 items" that never matched stock.
- * Prefer jQuery UI widget tied to the field; fall back to the nearest shown product menu.
+ * Prefer jQuery UI widget tied to the field; fall back to shown product menus.
+ * ALWAYS try exact stock id first (even if menu fails Playwright :visible / getClientRects).
  */
 function productAutocompleteItemsScript() {
   return ({ inputSel, id, sku, name }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    // ONLY page chrome / client leftovers — NEVER treat real stock/SGR services as noise
-    // (bug 30.10: filtering "garantie sgr|sgr sticla" made SGR picks time out with items=0).
+    const label = (li) => soft(li.innerText || li.textContent || li.getAttribute('aria-label') || '');
     const noise = t => {
       const x = soft(t);
       if (!x) return true;
       if (/^adauga client|client-add-new/.test(x)) return true;
-      if (/^carrefour romania\b/.test(x)) return true; // client leftover, not a product
+      if (/^carrefour romania\b/.test(x)) return true;
       if (/^(pce|xpp|buc|kg|lei|ron)$/.test(x)) return true;
       if (/^0160\b|gtin\s*-|global trade item/.test(x)) return true;
       return false;
     };
+    // Same rule as countForField — do NOT require getClientRects (Mentolime: n=1, Vazute:[])
     const shown = (ul) => {
       if (!ul) return false;
       const st = getComputedStyle(ul);
-      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0
-        && ul.getClientRects().length > 0;
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
     };
+    const clickLi = (hit) => {
+      try {
+        if (window.$ && window.$(hit).length) {
+          window.$(hit).trigger('mouseenter').click();
+        } else {
+          hit.scrollIntoView({ block: 'nearest' });
+          hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+          hit.click();
+        }
+      } catch { hit.click(); }
+    };
+
+    // 0) Exact stock id anywhere in autocomplete DOM (most reliable)
+    if (id) {
+      const byId = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+        .find(li => String(li.id) === String(id));
+      if (byId) {
+        clickLi(byId);
+        return { ok: true, id: byId.id, text: label(byId), n: 1, via: 'dom-id' };
+      }
+    }
+
     const input = document.querySelector(inputSel);
     let items = [];
-    // 1) jQuery UI widget bound to this exact field
+    let widget = null;
     try {
       if (input && window.$ && window.$(input).data('ui-autocomplete')) {
-        const w = window.$(input).autocomplete('widget')[0];
-        if (w && shown(w)) items = [...w.querySelectorAll('li.ui-menu-item')];
+        widget = window.$(input).autocomplete('widget')[0] || null;
+        if (widget) items = [...widget.querySelectorAll('li.ui-menu-item')];
       }
     } catch {}
-    // 2) aria-owns / autocomplete attr on the input
     if (!items.length && input) {
       const owns = input.getAttribute('aria-owns') || input.getAttribute('aria-controls');
       if (owns) {
         const w = document.getElementById(owns);
-        if (w && shown(w)) items = [...w.querySelectorAll('li.ui-menu-item')];
+        if (w) items = [...w.querySelectorAll('li.ui-menu-item')];
       }
     }
-    // 3) only shown product menus — drop client-add / unit / GTIN chrome
     if (!items.length) {
       const uls = [...document.querySelectorAll('ul.ui-autocomplete')].filter(shown);
       for (const ul of uls) {
         const lis = [...ul.querySelectorAll('li.ui-menu-item')];
-        const texts = lis.map(li => soft(li.innerText || li.textContent || ''));
+        const texts = lis.map(label);
         const looksProduct = lis.some(li => li.id && /^\d{5,}$/.test(String(li.id)))
           || texts.some(t => t && !noise(t) && t.length > 8);
         const looksClient = lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))
           || texts.some(t => /carrefour romania|adauga client/.test(t));
         if (looksClient && !looksProduct) continue;
-        if (lis.length && lis.every(li => noise(li.innerText || li.textContent || ''))) continue;
+        if (lis.length && lis.every(li => noise(label(li)))) continue;
         items = lis;
         break;
       }
     }
-    items = items.filter(li => !noise(li.innerText || li.textContent || ''));
-    const texts = items.map(li => ({ id: li.id || '', text: soft(li.innerText || li.textContent || '') }));
+    // Keep candidates for diagnostics even if later filtered
+    const rawTexts = items.map(li => ({ id: li.id || '', text: label(li) }));
+    items = items.filter(li => !noise(label(li)));
+    const texts = items.map(li => ({ id: li.id || '', text: label(li) }));
+
     let hit = id && items.find(li => String(li.id) === String(id));
     if (!hit && sku) {
       const sk = soft(sku);
-      hit = items.find(li => soft(li.id) === sk || soft(li.innerText).includes(sk)
-        || (/\(([^)]+)\)\s*$/.test(li.innerText || '') && soft(RegExp.$1) === sk));
+      hit = items.find(li => soft(li.id) === sk || label(li).includes(sk)
+        || (/\(([^)]+)\)\s*$/.test(li.innerText || li.textContent || '') && soft(RegExp.$1) === sk));
     }
     if (!hit && name) {
       const nrm = soft(name).replace(/[&+/]/g, ' ');
       const toks = nrm.split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'si', 'cu', 'de'].includes(t));
       const sz = (nrm.match(/\b(330|500|750|1000)\b/) || [])[1];
       hit = items.find(li => {
-        const t = soft(li.innerText || li.textContent || '');
+        const t = label(li);
         if (sz && !t.includes(sz)) return false;
         const need = toks.filter(x => !/^\d+$/.test(x));
         return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
       });
     }
+    // Single leftover row after a SKU/name search — accept if not chrome
     if (!hit && items.length === 1) {
       const only = items[0];
-      const t = soft(only.innerText || only.textContent || '');
+      const t = label(only);
       const idOk = id && String(only.id) === String(id);
-      const skuOk = sku && (soft(sku).length >= 3) && (t.includes(soft(sku)) || soft(only.id) === soft(sku));
-      const nameOk = name && soft(name).split(' ').filter(x => x.length > 3).slice(0, 2).every(tok => t.includes(tok));
-      if (idOk || skuOk || nameOk) hit = only;
+      const skuOk = sku && soft(sku).length >= 3 && (t.includes(soft(sku)) || soft(only.id) === soft(sku));
+      const nameToks = soft(name || '').replace(/[&+/]/g, ' ').split(' ').filter(x => x.length > 3 && !['furori', 'kombucha', 'ikombucha'].includes(x));
+      const nameOk = nameToks.length >= 2 && nameToks.slice(0, 2).every(tok => t.includes(tok));
+      // After typing exact SKU, SmartBill often returns exactly one stock row — take it if it has a stock id
+      const typedSkuOnly = sku && soft(sku).length >= 3 && only.id && /^\d{5,}$/.test(String(only.id));
+      if (idOk || skuOk || nameOk || typedSkuOnly) hit = only;
     }
-    if (!hit) return { ok: false, texts: texts.slice(0, 15), n: items.length };
-    try {
-      if (window.$ && window.$(hit).length) {
-        window.$(hit).trigger('mouseenter').click();
-      } else {
-        hit.scrollIntoView({ block: 'nearest' });
-        hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-        hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-        hit.click();
-      }
-    } catch {
-      hit.click();
-    }
-    return { ok: true, id: hit.id, text: soft(hit.innerText || hit.textContent || ''), n: items.length };
+    if (!hit) return { ok: false, texts: (texts.length ? texts : rawTexts).slice(0, 15), n: items.length || rawTexts.length };
+    clickLi(hit);
+    return { ok: true, id: hit.id, text: label(hit), n: items.length, via: 'menu' };
   };
 }
 
@@ -210,7 +225,7 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
   await triggerProductSearch(page, input, text);
   const deadline = Date.now() + timeout;
   let n = 0;
-  const countForField = async () => page.evaluate(({ inputSel }) => {
+  const countForField = async () => page.evaluate(({ inputSel, wantId }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim().toLowerCase();
     const noise = t => {
       const x = soft(t);
@@ -220,47 +235,50 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
     const shown = (ul) => {
       if (!ul) return false;
       const st = getComputedStyle(ul);
-      // accept opacity>0 even if off-screen (getClientRects can be 0 while menu is open)
       return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
     };
+    // Ready as soon as the wanted stock id exists in any autocomplete list
+    if (wantId && [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+      .some(li => String(li.id) === String(wantId))) return 1;
     const inputEl = document.querySelector(inputSel);
     try {
       if (inputEl && window.$ && window.$(inputEl).data('ui-autocomplete')) {
         const w = window.$(inputEl).autocomplete('widget')[0];
         if (w) {
-          const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || ''));
-          if (lis.length && (shown(w) || w.classList.contains('ui-autocomplete'))) return lis.length;
+          const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
+          if (lis.length) return lis.length;
         }
       }
     } catch {}
     let best = 0;
     for (const ul of document.querySelectorAll('ul.ui-autocomplete')) {
       if (!shown(ul)) continue;
-      const lis = [...ul.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || ''));
+      const lis = [...ul.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
       if (lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))) continue;
       best = Math.max(best, lis.length);
     }
-    // last resort: any li with numeric stock id in DOM (even if parent display quirky)
-    if (!best) {
-      const any = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
-        .filter(li => li.id && /^\d{5,}$/.test(String(li.id)) && !noise(li.innerText || ''));
-      best = any.length;
-    }
     return best;
-  }, { inputSel: input }).catch(() => 0);
+  }, { inputSel: input, wantId: id || null }).catch(() => 0);
 
   while (Date.now() < deadline) {
     n = await countForField();
     if (n > 0) break;
-    // re-nudge search halfway
     if (Date.now() > deadline - timeout / 2) await triggerProductSearch(page, input, text).catch(() => {});
     await page.waitForTimeout(T(250));
   }
   if (!n) throw new Error(`Dropdown produs lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
-  await page.waitForTimeout(T(350));
+  await page.waitForTimeout(T(250));
   let clicked = await page.evaluate(productAutocompleteItemsScript(), {
     inputSel: input, id: id || null, sku: sku || null, name: name || null,
   });
+  if (!clicked || !clicked.ok) {
+    // one retry: re-search then click by id/sku again (menu sometimes redraws)
+    await triggerProductSearch(page, input, text).catch(() => {});
+    await page.waitForTimeout(T(800));
+    clicked = await page.evaluate(productAutocompleteItemsScript(), {
+      inputSel: input, id: id || null, sku: sku || null, name: name || null,
+    });
+  }
   if (!clicked || !clicked.ok) {
     throw new Error(`Dropdown produs are ${clicked && clicked.n || n} iteme dar niciunul nu e stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
   }
