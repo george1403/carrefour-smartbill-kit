@@ -467,8 +467,10 @@ async function run(profile, opts = {}) {
     // if autocomplete times out, fall back to free-text + cota "0 % - SGR". Never enable SmartBill auto-SGR.
     for (const [i, l] of plan.lines.entries()) {
       const sgrLine = isSgrDepositLine(l);
+      await dismissBlockingDialogs(page, log);
       if (l.freeText) {
         await fillFreeTextProduct(page, l, i, result);
+        await dismissBlockingDialogs(page, log);
       } else {
         const id = l.smartbill.id;
         const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' ');
@@ -482,8 +484,10 @@ async function run(profile, opts = {}) {
           l._sgrFreeTextFallback = true;
           l.freeText = true; // nomenclature gate: treat as free-text (add_product=false)
           await fillFreeTextProduct(page, l, i, result);
+          await dismissBlockingDialogs(page, log);
           (result.sgrFreeTextFallback = result.sgrFreeTextFallback || []).push({ line: i + 1, name: l.name, reason: String(pickErr.message || pickErr).split('\n')[0] });
         }
+        await dismissBlockingDialogs(page, log);
       }
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
@@ -536,6 +540,23 @@ async function run(profile, opts = {}) {
           throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
         }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+      }
+      // SmartBill requires product_code on the line. Prefill-dialog "Nu" or free-text can leave it empty -> "Produsul nu are cod produs".
+      await dismissBlockingDialogs(page, log);
+      {
+        const codeWant = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || l.ean || l.carrefourCode || l.sellerCode || '').trim();
+        const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+        if (!codeNow && codeWant) {
+          await setField(page, '#product_code', codeWant, { pickExact: false, blurTo: '#quantity' });
+          await dismissBlockingDialogs(page, log); // answering Nu must not leave code empty — re-check
+          if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
+            await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, codeWant);
+          }
+          (result.productCodeEnsured = result.productCodeEnsured || []).push({ line: i + 1, code: await page.inputValue('#product_code') });
+        }
+        if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
+          throw new Error(`Linia ${i + 1} (${l.name}): SmartBill cere cod produs, iar campul e gol dupa completare.`);
+        }
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
       await page.click('#add_product_btn'); await page.waitForTimeout(2000);
