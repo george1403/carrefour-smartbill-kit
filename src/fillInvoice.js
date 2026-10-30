@@ -144,8 +144,18 @@ async function setProductLineName(page, name) {
 /** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
 async function fillFreeTextProduct(page, l, i, result) {
   await setProductLineName(page, l.name);
-  if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) {
-    await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
+  const codeWant = String(l.ean || l.carrefourCode || '').trim();
+  if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim() && codeWant) {
+    // evaluate only — typing the code opens "Exista un produs cu acest cod...?" and can clear the field on Nu
+    await page.evaluate(v => {
+      const e = document.querySelector('#product_code');
+      if (!e) return;
+      e.value = v;
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+      try { if (window.$) window.$(e).autocomplete('close'); } catch {}
+    }, codeWant);
+    await page.keyboard.press('Escape').catch(() => {});
   }
   (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback });
 }
@@ -541,23 +551,26 @@ async function run(profile, opts = {}) {
         }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
       }
-      // SmartBill requires product_code on the line. Prefill-dialog "Nu" or free-text can leave it empty -> "Produsul nu are cod produs".
-      // Set via evaluate (no keystrokes) so we do NOT re-open "Exista un produs cu acest cod...?".
+      // SmartBill requires product_code. Answering Nu on "Exista un produs cu acest cod" CLEARS the field.
+      // Prefer a line-only code that does not match nomenclator (avoids the dialog). Set value without events right before Add.
       await dismissBlockingDialogs(page, log);
       {
-        const codeWant = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || l.ean || l.carrefourCode || l.sellerCode || '').trim();
-        const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
-        if (!codeNow && codeWant) {
+        const raw = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || l.ean || l.carrefourCode || l.sellerCode || '').trim();
+        // Prefix CF- so SmartBill does not match an existing product and reopen the prefill dialog
+        const codeWant = raw ? (/^CF-/i.test(raw) ? raw : `CF-${raw}`) : '';
+        if (codeWant) {
           await page.evaluate(v => {
             const e = document.querySelector('#product_code');
             if (!e) return;
-            e.value = v;
-            e.dispatchEvent(new Event('input', { bubbles: true }));
-            e.dispatchEvent(new Event('change', { bubbles: true }));
+            e.value = v; // no input/change — avoids autocomplete + prefill dialog
             try { if (window.$) window.$(e).autocomplete('close'); } catch {}
           }, codeWant);
           await page.keyboard.press('Escape').catch(() => {});
           await dismissBlockingDialogs(page, log);
+          // if Nu cleared it, set again silently
+          if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
+            await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, codeWant);
+          }
           (result.productCodeEnsured = result.productCodeEnsured || []).push({ line: i + 1, code: await page.inputValue('#product_code') });
         }
         if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
@@ -566,11 +579,18 @@ async function run(profile, opts = {}) {
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
       await dismissBlockingDialogs(page, log);
-      // force click if a leftover overlay still intercepts (dialog already answered)
+      // silent re-ensure code one last time (shot/dialogs may have cleared it)
+      {
+        const c = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+        const ens = (result.productCodeEnsured || []).slice(-1)[0];
+        if (!c && ens && ens.code) await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, ens.code);
+      }
       try {
         await page.click('#add_product_btn', { timeout: 15000 });
       } catch (addErr) {
         await dismissBlockingDialogs(page, log);
+        const ens = (result.productCodeEnsured || []).slice(-1)[0];
+        if (ens && ens.code) await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, ens.code);
         await page.locator('#add_product_btn').click({ force: true, timeout: 10000 });
         (result.addProductForceClick = result.addProductForceClick || []).push({ line: i + 1, why: String(addErr.message || addErr).split('\n')[0] });
       }
