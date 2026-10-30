@@ -52,6 +52,72 @@ async function typeAndPick(page, input, text, liFilter, { timeout = 120000 } = {
   await page.waitForTimeout(1200);
 }
 
+/** Decode SmartBill HTML entities in autocomplete labels (&amp; → &, &#x27; → '). */
+function softNorm(s) {
+  return String(s || '')
+    .replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Type into product field and click the BEST autocomplete row for this stock product.
+ * Does NOT require exact full-name match (fixes "menta & lamaie" / &amp; / truncated labels).
+ */
+async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeout = 20000 } = {}) {
+  timeout = T(timeout);
+  const el = page.locator(input).first();
+  await el.click(); await el.fill('');
+  await el.pressSequentially(text, { delay: 35 });
+  const list = page.locator('ul.ui-autocomplete:visible li.ui-menu-item');
+  try {
+    await list.first().waitFor({ state: 'visible', timeout });
+  } catch (e) {
+    const any = await page.locator('ul.ui-autocomplete li.ui-menu-item').count().catch(() => 0);
+    throw new Error(`Dropdown lipsă după "${text}" in ${input} (waited ${timeout}ms, items=${any}). ${e.message.split('\n')[0]}`);
+  }
+  await page.waitForTimeout(T(400));
+  // Prefer: li#id → text contains SKU → soft-match name tokens → first item if only one
+  let clicked = await page.evaluate(({ id, sku, name }) => {
+    const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const items = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')].filter(li => {
+      const st = getComputedStyle(li); const p = li.closest('ul');
+      return st.display !== 'none' && st.visibility !== 'hidden' && (!p || getComputedStyle(p).display !== 'none');
+    });
+    const texts = items.map(li => ({ id: li.id || '', text: soft(li.innerText || li.textContent || '') }));
+    let hit = id && items.find(li => String(li.id) === String(id));
+    if (!hit && sku) hit = items.find(li => soft(li.innerText).includes(soft(sku)));
+    if (!hit && name) {
+      const toks = soft(name).replace(/[&+/]/g, ' ').split(' ').filter(t => t.length > 2 && !['furori','kombucha','ikombucha','ml','buc'].includes(t));
+      // need distinctive tokens (flavor + size)
+      hit = items.find(li => {
+        const t = soft(li.innerText);
+        const need = toks.filter(x => !/^\d+$/.test(x));
+        const hitN = need.filter(x => t.includes(x)).length;
+        return hitN >= Math.min(2, need.length) && (/\b500\b/.test(soft(name)) ? t.includes('500') : !/\b500\b/.test(t) || !/\b330\b/.test(soft(name)) || t.includes('330'));
+      });
+      // size-aware: if name has 500/330, require that in label
+      if (!hit) {
+        const sz = (soft(name).match(/\b(330|500|750|1000)\b/) || [])[1];
+        hit = items.find(li => {
+          const t = soft(li.innerText);
+          if (sz && !t.includes(sz)) return false;
+          return toks.filter(x => t.includes(x)).length >= Math.min(2, toks.length);
+        });
+      }
+    }
+    if (!hit && items.length === 1) hit = items[0];
+    if (!hit) return { ok: false, texts: texts.slice(0, 12) };
+    hit.scrollIntoView({ block: 'nearest' });
+    hit.click();
+    return { ok: true, id: hit.id, text: soft(hit.innerText), n: items.length };
+  }, { id: id || null, sku: sku || null, name: name || null });
+  if (!clicked || !clicked.ok) {
+    throw new Error(`Dropdown are iteme dar niciunul nu e produsul stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
+  }
+  await page.waitForTimeout(T(900));
+  return clicked;
+}
+
 /** Carrefour pieces: SmartBill UI often shows PCE; e-Factura / some products show XPP (UNECE). Same meaning. */
 function sameCarrefourUnit(a, b) {
   const n = s => String(s || '').trim().toUpperCase();
@@ -148,56 +214,59 @@ async function setProductLineName(page, name) {
 }
 
 /**
- * Pick an EXISTING SmartBill stock product (Shopify SKU). Tries id, then name/SKU text in dropdown.
- * After click, verifies #product_code == SKU so we know we hit the stock row (not a free-text invent).
+ * Pick EXISTING SmartBill stock/SGR service by SKU first (unique), then unique name tokens.
+ * Handles &amp;, truncated labels, slow bulk autocomplete. Never invents products.
  */
 async function pickExistingProduct(page, l, log) {
   const id = String(l.smartbill.id);
   const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
-  const name = String(l.smartbill.name || l.smartbill.Denumire || '').trim();
-  const nameRe = name ? new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'i') : null;
-  const skuRe = sku ? new RegExp(sku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
+  const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
+  // Unique search strings — SKU first (mentolime500), then distinctive flavor+size, avoid generic "Furori kombucha menta"
   const attempts = [];
-  // Prefer denumire (autocomplete indexes names better than SKU codes like ghimbirIK500)
-  if (name) {
-    const short = name.split(/\s+/).slice(0, 4).join(' ');
-    attempts.push({ field: '#product_name', text: short, filter: nameRe ? { hasText: nameRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
-    if (name !== short) attempts.push({ field: '#product_name', text: name, filter: nameRe ? { hasText: nameRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
-  }
   if (sku) {
-    attempts.push({ field: '#product_name', text: sku, filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
-    attempts.push({ field: '#product_name', text: sku, filter: skuRe ? { hasText: skuRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
-    attempts.push({ field: '#product_code', text: sku, filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+    attempts.push({ field: '#product_name', text: sku });
+    attempts.push({ field: '#product_code', text: sku });
   }
-  // last resort: id attribute on any of the typed queries
-  if (name) attempts.push({ field: '#product_name', text: name.split(/\s+/).slice(0, 3).join(' '), filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+  if (name) {
+    // "menta & lamaie 500" / "sokata 500" / "SGR plastic"
+    const toks = softNorm(name).replace(/[&+/]/g, ' ').split(' ').filter(Boolean);
+    const sz = (toks.find(t => /^(330|500|750)$/.test(t)) || '');
+    const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', sz].includes(t) && !/^\d+$/.test(t));
+    if (flavor.length && sz) attempts.push({ field: '#product_name', text: `${flavor.slice(0, 2).join(' ')} ${sz}` });
+    if (flavor.length >= 2) attempts.push({ field: '#product_name', text: flavor.slice(0, 3).join(' ') });
+    // last: first 3 words without &
+    const words = name.replace(/&/g, ' ').split(/\s+/).filter(w => w && w !== '&');
+    attempts.push({ field: '#product_name', text: words.slice(0, 3).join(' ') });
+    attempts.push({ field: '#product_name', text: words.slice(0, 5).join(' ') });
+  }
 
   let lastErr;
   for (const a of attempts) {
     try {
       await page.keyboard.press('Escape').catch(() => {});
       await dismissBlockingDialogs(page, log);
-      await typeAndPick(page, a.field, a.text, a.filter, { timeout: 12000 });
-      // Confirm we landed on the stock product (SmartBill fills Cod from nomenclator)
-      await page.waitForTimeout(T(600));
-      const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
-      const nameNow = ((await page.inputValue('#product_name').catch(() => '')) || '').trim();
-      const skuOk = !sku || codeNow === sku || codeNow.toLowerCase() === sku.toLowerCase();
-      const nameOk = !name || nameNow.toLowerCase().includes(name.toLowerCase().slice(0, 12));
-      if (!skuOk && !nameOk) {
+      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 20000 });
+      await page.waitForTimeout(T(500));
+      let codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+      const nameNow = softNorm(await page.inputValue('#product_name').catch(() => ''));
+      const skuOk = !sku || softNorm(codeNow) === softNorm(sku);
+      const nameOk = !name || softNorm(name).split(' ').slice(0, 3).every(t => t.length < 2 || nameNow.includes(t.replace(/&/g, '')));
+      if (!skuOk && sku) {
+        // force correct Shopify/SGR SKU on the line (product was picked; code field sometimes empty)
+        await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
+        codeNow = sku;
+      }
+      if (!skuOk && !nameOk && softNorm(codeNow) !== softNorm(sku)) {
         throw new Error(`dupa click, cod="${codeNow}" nume="${nameNow}" (asteptam SKU ${sku})`);
       }
-      if (sku && !skuOk && nameOk) {
-        // name matched but code empty/wrong — force Shopify SKU silently (still existing product pick)
-        await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
-      }
-      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || codeNow}" via ${a.field}="${a.text}" (cod=${codeNow || sku})`);
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || codeNow}" via ${a.field}="${a.text}" (cod=${codeNow || sku}, dd=${used.text || ''})`);
       return a;
     } catch (e) {
       lastErr = e;
       log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
       await page.keyboard.press('Escape').catch(() => {});
       await dismissBlockingDialogs(page, log);
+      await page.waitForTimeout(T(500));
     }
   }
   throw lastErr || new Error(`Nu am putut selecta produsul din stock SmartBill id ${id} (${sku || name})`);
