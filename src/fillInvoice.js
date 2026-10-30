@@ -62,6 +62,25 @@ async function selectByText(page, sel, re) {
   await page.selectOption(sel, val); await page.waitForTimeout(500);
   return val;
 }
+/** Select VAT rate with 0% SGR/SDD mapping: 0% lines -> "SGR" first, fallback "SDD", never bare "0%". */
+async function selectVatCode(page, vatRate) {
+  const rate = Number(vatRate);
+  // For 0% (SGR deposit guarantee / packaging), map to SmartBill cota "SGR" first, fallback "SDD"
+  if (rate === 0) {
+    const available = await page.$$eval('#vat_code option', opts => opts.map(o => o.text.trim()));
+    // Try SGR first (deposit return, garanție returabilă)
+    const sgr = available.find(t => /^\s*SGR\b/i.test(t));
+    if (sgr) { await selectByText(page, '#vat_code', /^\s*SGR\b/i); return 'SGR'; }
+    // Fallback to SDD (0% scutit de taxa)
+    const sdd = available.find(t => /^\s*SDD\b/i.test(t));
+    if (sdd) { await selectByText(page, '#vat_code', /^\s*SDD\b/i); return 'SDD'; }
+    // Neither SGR nor SDD exist: original error
+    throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Adaugă o cotă numită "SGR" la 0% / E - Scutit de taxă în SmartBill (Configurare > Cote TVA), sau "SDD" ca alternativă.`), { code: 'NEEDS_HUMAN' });
+  }
+  // Non-zero rates: original logic (11%, 21%, etc. match by percentage text)
+  await selectByText(page, '#vat_code', new RegExp(`^${vatRate}\\s*%$`));
+  return `${vatRate}%`;
+}
 
 async function dismissNotices(page) {
   for (let i = 0; i < 3; i++) {
@@ -294,8 +313,9 @@ async function run(profile, opts = {}) {
         await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
-      await selectByText(page, '#vat_code', new RegExp(`^${l.vat}\\s*%$`));
+      const selectedVat = await selectVatCode(page, l.vat);
       await page.check('#is_vat_included_no');
+      (result.vatMapping = result.vatMapping || []).push({ line: i + 1, requested: l.vat, selected: selectedVat });
       const bt156 = page.locator('#id-product-additional-field-buyersItemIdentification');
       if (!(await bt156.isVisible())) { await page.locator('xpath=//*[normalize-space(text())="DETALII PRODUS"]/ancestor::*[contains(@class,"row") or contains(@class,"flex")][1]//*[contains(@class,"edit") or contains(@class,"pencil") or contains(@class,"pen")]').first().click(); await page.waitForTimeout(800); }
       await bt156.fill(String(l.carrefourCode || ''));
