@@ -26,16 +26,19 @@ const profile = fs.existsSync(profilePath) ? JSON.parse(fs.readFileSync(profileP
 const PT_VAT = disc.vat || ['21 %', '0 % - SGR', '11 %', '0 % - SDD', '0 % - SFDD', '19 %'];
 
 let bad = 0; const results = [];
+const queue = [];
 function T(id, name, fn) {
-  try {
-    const ev = fn();
-    results.push({ id, name, ok: true, ev: String(ev || 'ok') });
-    console.log(`PASS ${id} ${name} :: ${ev}`);
-  } catch (e) {
-    bad++;
-    results.push({ id, name, ok: false, ev: String(e.message || e) });
-    console.log(`FAIL ${id} ${name} :: ${e.message || e}`);
-  }
+  queue.push(async () => {
+    try {
+      const ev = await fn();
+      results.push({ id, name, ok: true, ev: String(ev || 'ok') });
+      console.log(`PASS ${id} ${name} :: ${ev}`);
+    } catch (e) {
+      bad++;
+      results.push({ id, name, ok: false, ev: String(e.message || e) });
+      console.log(`FAIL ${id} ${name} :: ${e.message || e}`);
+    }
+  });
 }
 function assert(cond, msg) { if (!cond) throw new Error(msg || 'assert'); }
 
@@ -260,7 +263,119 @@ T('N01', 'Nomenclator: dupa rename Carrefour NU reataseaza id (altfel redenumest
   assert(!/Prefer "no gestiune"/.test(src), 'gestiune still cleared in reset');
   assert(/Do NOT touch #product_gestiune/.test(src), 'gestiune preserve comment missing');
   assert(/ar redenumi nomenclatorul/.test(src), 'gate for renamed+id missing');
-  return 'nomenclator detach + gestiune preserve OK';
+  assert(/function applyNomenclatorSafetyGate/.test(src), 'shared gate fn missing');
+  assert(/Nomenclator gate pre-salvare/.test(src), 'pre-save re-gate missing in issueNow');
+  assert(/ensureLineGestiune/.test(src), 'gestiune ensure missing');
+  assert(typeof fi.applyNomenclatorSafetyGate === 'function');
+  return 'nomenclator detach + pre-save gate + gestiune ensure OK';
+});
+
+T('N02', 'applyNomenclatorSafetyGate: rename → id null + add_product false (unit, mock page)', async () => {
+  // Simulated with a tiny playwright page injecting window.products
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent('<html><body></body></html>');
+  await page.evaluate(() => {
+    window.products = [{
+      product_name: 'KOMBUCHA MENTOLIME 500ML', product_code: 'WRONG', id: '32214943',
+      add_product: true, is_discount: false, measuring_unit: 'PCE', product_description: '',
+    }];
+  });
+  const plan = { lines: [{
+    name: 'KOMBUCHA MENTOLIME 500ML',
+    _pickedExisting: true,
+    freeText: false,
+    smartbill: { id: '32214943', code: 'mentolime500', name: 'Furori kombucha menta & lamaie 500 ml' },
+  }] };
+  const cfg = { smartbill: { carrefourLineName: true } };
+  const gate = await fi.applyNomenclatorSafetyGate(page, plan, cfg);
+  await b.close();
+  assert(gate.state[0].add_product === false, JSON.stringify(gate.state));
+  assert(gate.state[0].id == null, 'id should detach on rename');
+  assert(gate.state[0].code === 'mentolime500', gate.state[0].code);
+  assert(gate.keepPayload[0].renamed === true);
+  return 'mock gate OK';
+});
+
+T('N03', 'fara rename: pastreaza id stock + add_product false; CF-* code se curata', async () => {
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent('<html><body></body></html>');
+  await page.evaluate(() => {
+    window.products = [{
+      product_name: 'Furori kombucha menta & lamaie 500 ml', product_code: 'CF-999', id: '32214943',
+      add_product: true, is_discount: false, measuring_unit: 'PCE', product_description: '',
+    }];
+  });
+  const plan = { lines: [{
+    name: 'Furori kombucha menta & lamaie 500 ml',
+    _pickedExisting: true,
+    freeText: false,
+    smartbill: { id: '32214943', code: 'mentolime500', name: 'Furori kombucha menta & lamaie 500 ml' },
+  }] };
+  const cfg = { smartbill: { carrefourLineName: true } };
+  const gate = await fi.applyNomenclatorSafetyGate(page, plan, cfg);
+  await b.close();
+  assert(gate.state[0].add_product === false);
+  assert(String(gate.state[0].id) === '32214943', 'must keep stock id when name matches');
+  assert(gate.state[0].code === 'mentolime500', gate.state[0].code);
+  assert(gate.keepPayload[0].renamed === false);
+  return 'keep id when not renamed OK';
+});
+
+T('N04', 'multi-linie: SGR fara rename pastreaza id; bautura Carrefour detach', async () => {
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent('<html><body></body></html>');
+  await page.evaluate(() => {
+    window.products = [
+      { product_name: 'Garantie SGR sticla', product_code: 'x', id: '111', add_product: true, is_discount: false, measuring_unit: 'PCE', product_description: '' },
+      { product_name: 'KOMBUCHA SOKATA 500ML', product_code: 'CF-1', id: '222', add_product: true, is_discount: false, measuring_unit: 'PCE', product_description: '' },
+    ];
+  });
+  const plan = { lines: [
+    { name: 'Garantie SGR sticla', _pickedExisting: true, freeText: false, smartbill: { id: '111', code: 'SGR sticla', name: 'Garantie SGR sticla' } },
+    { name: 'KOMBUCHA SOKATA 500ML', _pickedExisting: true, freeText: false, smartbill: { id: '222', code: 'sokataF500', name: 'Furori kombucha soc 500 ml' } },
+  ] };
+  const cfg = { smartbill: { carrefourLineName: true } };
+  const gate = await fi.applyNomenclatorSafetyGate(page, plan, cfg);
+  await b.close();
+  assert(gate.state[0].id == '111' && gate.state[0].add_product === false, JSON.stringify(gate.state[0]));
+  assert(gate.state[1].id == null && gate.state[1].code === 'sokataF500' && gate.state[1].add_product === false, JSON.stringify(gate.state[1]));
+  return 'multi-line mixed rename OK';
+});
+
+T('G01', 'ensureLineGestiune: selecteaza prima gestiune reala daca e goala', async () => {
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent(`<select id="product_gestiune">
+    <option value="0">Alege</option>
+    <option value="55">Depozit principal</option>
+    <option value="66">Magazin</option>
+  </select>`);
+  const info = await fi.ensureLineGestiune(page);
+  await b.close();
+  assert(info.picked === true && info.value === '55', JSON.stringify(info));
+  return `gestiune → ${info.text}`;
+});
+
+T('G02', 'ensureLineGestiune: pastreaza gestiunea deja selectata', async () => {
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent(`<select id="product_gestiune">
+    <option value="0">Alege</option>
+    <option value="55">Depozit principal</option>
+    <option value="66" selected>Magazin</option>
+  </select>`);
+  const info = await fi.ensureLineGestiune(page);
+  await b.close();
+  assert(info.kept === true && info.value === '66', JSON.stringify(info));
+  return `kept ${info.text}`;
 });
 
 T('S01', 'forbiddenValues + KCRF absent din src shipped', () => {
@@ -282,8 +397,11 @@ T('S02', 'pick nu mai seteaza ul.style.display=none (doar comentariu de avertiza
   return 'no display:none assign; vat+code pick present';
 });
 
-const out = path.join(ROOT, 'out/pure-therapy/bypass-matrix.json');
-fs.mkdirSync(path.dirname(out), { recursive: true });
-fs.writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), bad, total: results.length, results }, null, 2));
-console.log(`\n${results.length - bad}/${results.length} bypass gates OK → ${out}`);
-process.exit(bad ? 1 : 0);
+(async () => {
+  for (const run of queue) await run();
+  const out = path.join(ROOT, 'out/pure-therapy/bypass-matrix.json');
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), bad, total: results.length, results }, null, 2));
+  console.log(`\n${results.length - bad}/${results.length} bypass gates OK → ${out}`);
+  process.exit(bad ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(1); });

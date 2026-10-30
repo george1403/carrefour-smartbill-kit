@@ -755,6 +755,72 @@ async function dismissNotices(page) {
   }
 }
 
+/** If #product_gestiune exists and is empty/0, select the first real warehouse option. */
+async function ensureLineGestiune(page, log = () => {}) {
+  const info = await page.evaluate(() => {
+    const g = document.querySelector('#product_gestiune');
+    if (!g) return { found: false };
+    const opts = [...g.options].map(o => ({ v: String(o.value || ''), t: (o.text || '').trim() }));
+    const cur = String(g.value || '');
+    if (cur && cur !== '0' && cur !== '-1') return { found: true, value: cur, text: g.selectedOptions[0] && g.selectedOptions[0].text.trim(), kept: true };
+    const pick = opts.find(o => o.v && o.v !== '0' && o.v !== '-1' && o.t && !/^select|alege|fara|fără|nici/i.test(o.t));
+    if (!pick) return { found: true, value: cur, options: opts.slice(0, 8), picked: null };
+    g.value = pick.v;
+    g.dispatchEvent(new Event('change', { bubbles: true }));
+    try { if (window.$) window.$(g).val(pick.v).trigger('change'); } catch {}
+    return { found: true, value: pick.v, text: pick.t, picked: true };
+  });
+  if (info.found && info.picked) log(`Gestiune linie: selectat "${info.text}" (${info.value})`);
+  else if (info.found && info.kept) log(`Gestiune linie: pastrat "${info.text}" (${info.value})`);
+  else if (info.found) log('Gestiune linie: camp prezent dar fara optiune utila');
+  return info;
+}
+
+/**
+ * Prevent SmartBill from writing invoice line names into the stock nomenclator.
+ * Live proof (Delios): after Carrefour rename, add_product becomes true while id stays set —
+ * that is what renamed Pure Therapy products. Gate: add_product=false always; detach id when
+ * line name ≠ Shopify/stock name; keep Shopify SKU on product_code.
+ */
+async function applyNomenclatorSafetyGate(page, plan, cfg) {
+  const keepPayload = (plan.lines || []).map(l => {
+    const sku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null;
+    const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
+    const renamed = !!(cfg.smartbill?.carrefourLineName && l.name && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
+    return {
+      sku,
+      keepId: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText && !renamed),
+      id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
+      renamed,
+    };
+  });
+  const was = await page.evaluate((payload) => (window.products || []).map((p, i) => {
+    const prev = { id: p.id, add_product: p.add_product, code: p.product_code, name: p.product_name };
+    if (!p.is_discount) {
+      p.add_product = false;
+      const row = payload[i] || {};
+      if (row.sku) p.product_code = row.sku;
+      if (row.keepId && row.id) p.id = row.id;
+      else {
+        p.id = null;
+        if (/^CF-/i.test(String(p.product_code || ''))) p.product_code = '';
+      }
+    }
+    return prev;
+  }), keepPayload);
+  const state = await page.evaluate(() => (window.products || []).map(p => ({
+    name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description,
+  })));
+  for (const [i, st] of state.entries()) {
+    if (st.add_product) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
+    if (/^CF-/i.test(String(st.code || ''))) throw new Error(`STOP: linia ${i + 1} are cod CF-* (${st.code}) — ar crea produs nou. Foloseste SKU Shopify.`);
+    if (keepPayload[i] && keepPayload[i].renamed && st.id) {
+      throw new Error(`STOP: linia ${i + 1} are nume Carrefour dar inca e legata de produsul stock id=${st.id} — ar redenumi nomenclatorul.`);
+    }
+  }
+  return { was, state, keepPayload };
+}
+
 /** Close SmartBill blocking dialogs that intercept clicks (product-code prefill, nomenclator, info).
  *  Prefill "Exista un produs cu acest cod..." -> Nu: keep Carrefour typed line (name/VAT/SGR), never pull nomenclator SGR auto. */
 async function dismissBlockingDialogs(page, log = () => {}) {
@@ -1028,6 +1094,9 @@ async function run(profile, opts = {}) {
         }
         await dismissBlockingDialogs(page, log);
       }
+      // If SmartBill shows a gestiune dropdown on the line, keep/select a real warehouse
+      // (we no longer clear it during pick). Empty gestiune forces manual fix on invoices.
+      (result.gestiuneLine = result.gestiuneLine || []).push({ line: i + 1, ...(await ensureLineGestiune(page, log)) });
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
       const selectedVat = await selectVatCode(page, l.vat);
@@ -1171,47 +1240,12 @@ async function run(profile, opts = {}) {
         }, { sku: shopifySku || null, detachId: lineIsCarrefourRename || !!l.freeText });
       }
     }
-    // Final nomenclature gate before Spre salvare:
-    // - add_product MUST stay false (never create/rename stock products)
-    // - if line name is Carrefour text, id MUST be null (keeping id + different name renames the product in SmartBill)
-    // - product_code stays Shopify SKU for traceability
-    const keepPayload = plan.lines.map(l => {
-      const sku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null;
-      const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
-      const renamed = !!(cfg.smartbill?.carrefourLineName && l.name && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
-      return {
-        sku,
-        // Only keep stock id when we did NOT overwrite the line name with Carrefour text
-        keepId: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText && !renamed),
-        id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
-        renamed,
-      };
-    });
-    result.lineNomenclator = await page.evaluate((payload) => (window.products || []).map((p, i) => {
-      const was = { id: p.id, add_product: p.add_product, code: p.product_code, name: p.product_name };
-      if (!p.is_discount) {
-        p.add_product = false;
-        const row = payload[i] || {};
-        if (row.sku) p.product_code = row.sku;
-        if (row.keepId && row.id) p.id = row.id;
-        else {
-          p.id = null;
-          if (/^CF-/i.test(String(p.product_code || ''))) p.product_code = '';
-        }
-      }
-      return was;
-    }), keepPayload);
+    // Final nomenclature gate (also re-applied in issueNow right before Spre salvare).
+    result.nomenclatorGate = await applyNomenclatorSafetyGate(page, plan, cfg);
+    result.lineNomenclator = result.nomenclatorGate.was;
+    result.lineState = result.nomenclatorGate.state;
     if (cfg.smartbill?.carrefourLineName) { const names = await page.evaluate(() => (window.products || []).map(p => p.product_name));
       plan.lines.forEach((l, i) => { if (names[i] !== l.name) throw new Error(`STOP: linia ${i + 1} are numele "${names[i]}" in loc de "${l.name}"`); }); }
-    result.lineState = await page.evaluate(() => (window.products || []).map(p => ({ name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description })));
-    for (const [i, st] of result.lineState.entries()) {
-      if (st.add_product) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
-      if (/^CF-/i.test(String(st.code || ''))) throw new Error(`STOP: linia ${i + 1} are cod CF-* (${st.code}) — ar crea produs nou. Foloseste SKU Shopify.`);
-      // Carrefour rename on the line + stock id still attached = nomenclator would be renamed on save
-      if (keepPayload[i] && keepPayload[i].renamed && st.id) {
-        throw new Error(`STOP: linia ${i + 1} are nume Carrefour dar inca e legata de produsul stock id=${st.id} — ar redenumi nomenclatorul.`);
-      }
-    }
     result.seriesAtEnd = await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
     if (!new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(result.seriesAtEnd || '')) throw new Error(`Seria s-a schimbat in ${result.seriesAtEnd}`);
     if (!(await page.evaluate(() => (window.products || []).length))) throw new Error('Nicio linie adaugata pe factura: ' + JSON.stringify(result.afterAdd));
@@ -1232,7 +1266,7 @@ async function run(profile, opts = {}) {
       await page.click('#saveInvoiceBtn'); await page.waitForTimeout(4000); result.probeShot = await shot('40-dupa-spre-salvare-BLOCAT');
       result.probe = await page.evaluate(() => [...document.querySelectorAll('button, a.btn, .modal:not([style*="none"]) *')].filter(e => e.offsetParent && /btn/.test(e.className) && e.innerText.trim()).map(e => `${e.tagName}#${e.id} ${e.innerText.trim().slice(0, 60)} .${String(e.className).slice(0, 50)}`).slice(0, 60));
     }
-    if (issue) result.issued = await issueNow(page, s, profile, order, shot, log, { draftOnly });
+    if (issue) result.issued = await issueNow(page, s, profile, order, shot, log, { draftOnly, plan, cfg });
   } catch (e) {
     result.error = e.message.split('\n')[0];
     await shot('99-eroare').catch(() => {});
@@ -1267,7 +1301,7 @@ const kerr = (code, msg, extra = {}) => Object.assign(new Error(msg), { code, ..
 // Indirection so the offline tests can replace the SmartBill-touching steps (XML preview, final save, report lookups) with mocks.
 const D = { downloadXml: (...a) => downloadXml(...a), finalizeDraft: (...a) => finalizeDraft(...a), readReport: (...a) => readInvoiceReport(...a) };
 
-async function issueNow(page, s, profile, order, shot, log, { draftOnly = false } = {}) {
+async function issueNow(page, s, profile, order, shot, log, { draftOnly = false, plan = null, cfg = null } = {}) {
   const ledgerFile = path.join(profile.dirs.out, draftOnly ? 'drafts.json' : 'issued.json');
   const { readLedger } = require('./fsx'); const nzk = k => String(k).replace(/^0+/, '');
   const L = readLedger(ledgerFile); const prevKey = Object.keys(L).find(k => nzk(k) === nzk(order.orderNo));
@@ -1275,6 +1309,14 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   // merge-save: re-read the file and replace ONLY this order, so a parallel run never loses entries
   const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
   L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; save();
+  // Re-assert nomenclator safety immediately before Spre salvare (SmartBill may flip add_product back on).
+  if (plan && cfg) {
+    const gate = await applyNomenclatorSafetyGate(page, plan, cfg);
+    log(`Nomenclator gate pre-salvare: ${gate.state.length} linii, add_product=${gate.state.map(x => !!x.add_product)}, ids=${gate.state.map(x => x.id)}`);
+  } else {
+    // Fallback: force every line add_product=false even without plan context
+    await page.evaluate(() => { for (const p of (window.products || [])) { if (!p.is_discount) p.add_product = false; } });
+  }
   const before = page.url();
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
@@ -1420,4 +1462,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune };
