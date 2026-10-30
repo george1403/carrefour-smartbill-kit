@@ -1,0 +1,46 @@
+{
+  "source": "carrefour-portal",
+  "orderNo": "206008",
+  "orderDate": "2026-10-26",
+  "deliveryDate": null,
+  "despatchId": "175302315860219",
+  "invoicedAtCarrefour": null,
+  "store": {
+    "gln": "5940477602503",
+    "name": "3059 CARREFOUR SOSEAUA ALEXANDRIEI",
+    "street": "SOS. ALEXANDRIA, NR 152",
+    "city": "BUCURESTI",
+    "rawCity": "BUCURESTI, SECTOR 5",
+    "county": "Bucuresti",
+    "country": "RO"
+  },
+  "lines": [
+    {
+      "name": "GARANTIE PET",
+      "ean": "3162",
+      "carrefourCode": "73006651",
+      "qty": 2,
+      "unitCode": "A",
+      "price": 0.5,
+      "vat": 0
+    },
+    {
+      "name": "KOMBUCHA SOKATA 500ML",
+      "ean": "5940628423100",
+      "carrefourCode": "10511229",
+      "qty": 1,
+      "unitCode": "A",
+      "price": 6.61,
+      "vat": 21
+    },
+    {
+      "name": "KOMBUCHA PASSION 500ML",
+      "ean": "5940628423360",
+      "carrefourCode": "10511228",
+      "qty": 1,
+      "unitCode": "A",
+      "price": 6.61,
+      "vat": 21
+    }
+  ]
+}

@@ -51,6 +51,27 @@ async function typeAndPick(page, input, text, liFilter, { timeout = 120000 } = {
   await li.click();
   await page.waitForTimeout(1200);
 }
+
+/** Carrefour already sends SGR deposit as its own 0% line (GARANTIE PET/STICLA/SGR).
+ *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line). */
+function isSgrDepositLine(l) {
+  if (Number(l.vat) !== 0) return false;
+  return /GARANTIE|SGR|\bPET\b|\bSTICLA\b|\bSTICL[AĂ]\b/i.test(String(l.name || '') + ' ' + String(l.carrefourCode || '') + ' ' + String(l.ean || ''));
+}
+
+/** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
+async function fillFreeTextProduct(page, l, i, result) {
+  const pn = page.locator('#product_name');
+  await pn.click(); await pn.fill('');
+  await pn.pressSequentially(String(l.name), { delay: 30 });
+  await page.waitForTimeout(T(1500));
+  // Blur to dismiss autocomplete without picking a SmartBill product (avoids auto-SGR side effects)
+  await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
+  if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) {
+    await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
+  }
+  (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback });
+}
 async function setDate(page, prefix, iso) {
   const { d, m, y } = dmy(iso);
   for (const [k, val] of [['day', d], ['month', m], ['year', y]]) {
@@ -342,18 +363,33 @@ async function run(profile, opts = {}) {
     if (order.deliveryDate) { if (!(await page.isChecked('#deliveryDateCB'))) await page.check('#deliveryDateCB'); await setDate(page, 'delivery', order.deliveryDate); }
 
     // lines
+    // SGR deposit lines (GARANTIE PET/STICLA at 0%): Carrefour already sent them. Prefer pick from nomenclator;
+    // if autocomplete times out, fall back to free-text + cota "0 % - SGR". Never enable SmartBill auto-SGR.
     for (const [i, l] of plan.lines.entries()) {
-      if (l.freeText) { const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 30 }); await page.waitForTimeout(T(1500)); await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
-        // product not in the producer's SmartBill list: SmartBill requires a product code on the line -> use the EAN (line only, never saved to the list)
-        if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
-        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code') }); }
-      else { const id = l.smartbill.id;
-        await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
+      const sgrLine = isSgrDepositLine(l);
+      if (l.freeText) {
+        await fillFreeTextProduct(page, l, i, result);
+      } else {
+        const id = l.smartbill.id;
+        const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' ');
+        const pickTimeout = sgrLine ? 25000 : 120000; // fail fast on SGR so free-text can take over
+        try {
+          await typeAndPick(page, '#product_name', pickText, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: pickTimeout });
+        } catch (pickErr) {
+          if (!sgrLine) throw pickErr;
+          log(`SGR linie ${i + 1} (${l.name}): autocomplete timeout/fail -> free-text + cota 0% SGR. (${String(pickErr.message || pickErr).split('\n')[0]})`);
+          await page.keyboard.press('Escape').catch(() => {});
+          l._sgrFreeTextFallback = true;
+          l.freeText = true; // nomenclature gate: treat as free-text (add_product=false)
+          await fillFreeTextProduct(page, l, i, result);
+          (result.sgrFreeTextFallback = result.sgrFreeTextFallback || []).push({ line: i + 1, name: l.name, reason: String(pickErr.message || pickErr).split('\n')[0] });
+        }
+      }
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
       const selectedVat = await selectVatCode(page, l.vat);
       await page.check('#is_vat_included_no');
-      (result.vatMapping = result.vatMapping || []).push({ line: i + 1, requested: l.vat, selected: selectedVat });
+      (result.vatMapping = result.vatMapping || []).push({ line: i + 1, requested: l.vat, selected: selectedVat, sgrDeposit: sgrLine, freeTextFallback: !!l._sgrFreeTextFallback });
       const bt156 = page.locator('#id-product-additional-field-buyersItemIdentification');
       if (!(await bt156.isVisible())) { await page.locator('xpath=//*[normalize-space(text())="DETALII PRODUS"]/ancestor::*[contains(@class,"row") or contains(@class,"flex")][1]//*[contains(@class,"edit") or contains(@class,"pencil") or contains(@class,"pen")]').first().click(); await page.waitForTimeout(800); }
       await bt156.fill(String(l.carrefourCode || ''));
