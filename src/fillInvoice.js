@@ -68,12 +68,15 @@ function softNorm(s) {
 function productAutocompleteItemsScript() {
   return ({ inputSel, id, sku, name }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    // ONLY page chrome / client leftovers — NEVER treat real stock/SGR services as noise
+    // (bug 30.10: filtering "garantie sgr|sgr sticla" made SGR picks time out with items=0).
     const noise = t => {
       const x = soft(t);
       if (!x) return true;
-      if (/^adauga client|client-add-new|carrefour romania|garantie sgr|sgr plastic|sgr sticla/.test(x)) return true;
+      if (/^adauga client|client-add-new/.test(x)) return true;
+      if (/^carrefour romania\b/.test(x)) return true; // client leftover, not a product
       if (/^(pce|xpp|buc|kg|lei|ron)$/.test(x)) return true;
-      if (/^0160\b|gtin|global trade item/.test(x)) return true;
+      if (/^0160\b|gtin\s*-|global trade item/.test(x)) return true;
       return false;
     };
     const shown = (ul) => {
