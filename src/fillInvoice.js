@@ -105,7 +105,15 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
         return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
       });
     }
-    if (!hit && items.length === 1) hit = items[0];
+    // NEVER click "only item" unless it clearly matches id/sku/name — numeric SKUs can return unrelated singles
+    if (!hit && items.length === 1) {
+      const only = items[0];
+      const t = soft(only.innerText || only.textContent || '');
+      const idOk = id && String(only.id) === String(id);
+      const skuOk = sku && (soft(sku).length >= 3) && (t.includes(soft(sku)) || soft(only.id) === soft(sku));
+      const nameOk = name && soft(name).split(' ').filter(x => x.length > 3).slice(0, 2).every(tok => t.includes(tok));
+      if (idOk || skuOk || nameOk) hit = only;
+    }
     if (!hit) return { ok: false, texts: texts.slice(0, 15), n: items.length };
     // jQuery UI select if available (more reliable than raw click)
     try {
