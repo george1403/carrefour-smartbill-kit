@@ -542,16 +542,22 @@ async function run(profile, opts = {}) {
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
       }
       // SmartBill requires product_code on the line. Prefill-dialog "Nu" or free-text can leave it empty -> "Produsul nu are cod produs".
+      // Set via evaluate (no keystrokes) so we do NOT re-open "Exista un produs cu acest cod...?".
       await dismissBlockingDialogs(page, log);
       {
         const codeWant = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || l.ean || l.carrefourCode || l.sellerCode || '').trim();
         const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
         if (!codeNow && codeWant) {
-          await setField(page, '#product_code', codeWant, { pickExact: false, blurTo: '#quantity' });
-          await dismissBlockingDialogs(page, log); // answering Nu must not leave code empty — re-check
-          if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
-            await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, codeWant);
-          }
+          await page.evaluate(v => {
+            const e = document.querySelector('#product_code');
+            if (!e) return;
+            e.value = v;
+            e.dispatchEvent(new Event('input', { bubbles: true }));
+            e.dispatchEvent(new Event('change', { bubbles: true }));
+            try { if (window.$) window.$(e).autocomplete('close'); } catch {}
+          }, codeWant);
+          await page.keyboard.press('Escape').catch(() => {});
+          await dismissBlockingDialogs(page, log);
           (result.productCodeEnsured = result.productCodeEnsured || []).push({ line: i + 1, code: await page.inputValue('#product_code') });
         }
         if (!((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
@@ -559,7 +565,17 @@ async function run(profile, opts = {}) {
         }
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
-      await page.click('#add_product_btn'); await page.waitForTimeout(2000);
+      await dismissBlockingDialogs(page, log);
+      // force click if a leftover overlay still intercepts (dialog already answered)
+      try {
+        await page.click('#add_product_btn', { timeout: 15000 });
+      } catch (addErr) {
+        await dismissBlockingDialogs(page, log);
+        await page.locator('#add_product_btn').click({ force: true, timeout: 10000 });
+        (result.addProductForceClick = result.addProductForceClick || []).push({ line: i + 1, why: String(addErr.message || addErr).split('\n')[0] });
+      }
+      await page.waitForTimeout(2000);
+      await dismissBlockingDialogs(page, log);
       (result.afterAdd = result.afterAdd || []).push({ line: i + 1, series: await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null),
         dialogs: await page.evaluate(() => [...document.querySelectorAll('.modal, .ui-dialog, .swal2-popup, [role=dialog]')].filter(m => m.offsetParent || getComputedStyle(m).display === 'block').map(m => m.innerText.replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean)),
         rows: await page.evaluate(() => (window.products || []).length) });
