@@ -38,7 +38,7 @@ async function setField(page, sel, text, { blurTo = '#quantity', pickExact = tru
   return el.inputValue();
 }
 
-async function typeAndPick(page, input, text, liFilter, { timeout = 60000 } = {}) { timeout = T(timeout);
+async function typeAndPick(page, input, text, liFilter, { timeout = 120000 } = {}) { timeout = T(timeout);
   const el = page.locator(input).first();
   await el.click(); await el.fill('');
   await el.pressSequentially(text, { delay: 40 });
@@ -46,7 +46,7 @@ async function typeAndPick(page, input, text, liFilter, { timeout = 60000 } = {}
   try {
     await li.waitFor({ state: 'visible', timeout });
   } catch (e) {
-    throw new Error(`Timeout waiting for dropdown after typing "${text}" in ${input}. SmartBill slow or element not found. Original: ${e.message}`);
+    throw new Error(`Timeout waiting for dropdown after typing "${text}" in ${input}. SmartBill slow or element not found (waited ${timeout}ms). Original: ${e.message}`);
   }
   await li.click();
   await page.waitForTimeout(1200);

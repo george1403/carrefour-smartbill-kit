@@ -30,7 +30,7 @@ const HELP = `Comenzi:
                         --check = doar arata ce ar face; --draft-only = forteaza ciorne; --watch --every=60 = repeta
   bulk-ciorne           (meniu 9) CIORNE IN BLOC: TOATE comenzile nefacturate din portal (fara limita de data) -> ciorne,
                         in loturi; arata lista + total si cere "da"; NU emite niciodata (nici in mod automat)
-                        --check = doar lista, nu creeaza nimic; --lot=10 = marimea lotului
+                        --check = doar lista, nu creeaza nimic; --lot=10 = marimea lotului; --yes = nu cere confirmare "da"
   support               (meniu 13) arhiva cu jurnalele pentru suport, FARA parole
   repair                (meniu 14) reinstaleaza browserul / bibliotecile lipsa
   uninstall             (meniu 15) opreste verificarea automata si explica stergerea
@@ -80,7 +80,7 @@ Coduri de iesire: 0 ok, 1 eroare, 2 oprit (ar fi dubla), 3 autentificare Carrefo
     if (flag('watch')) { const r = await a.watch(profile, { ...o, every: Number(opt('every') || 60) }); process.exitCode = r.exit || 0; return; }
     const r = await a.runOnce(profile, o); if (r.busy && !process.env.KIT_IN_MENU) console.error('CE FACI: ' + require('../src/errors').HELP[13]);
     process.exitCode = r.exit != null ? r.exit : (r.errors?.length ? 1 : 0); return; }
-  if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10) });
+  if (cmd === 'bulk-ciorne') { const r = await require('../src/bulk').run(profile, { check: flag('check'), batch: Number(opt('lot') || 10), confirm: flag('yes') ? async () => 'da' : undefined });
     if (process.env.KIT_BULK_SUMMARY) require('fs').writeFileSync(process.env.KIT_BULK_SUMMARY, JSON.stringify({ todo: (r.preview || []).length, exit: r.exit || 0 }));
     process.exitCode = r.exit || 0; return; }
   if (cmd === 'schedule') return console.log(flag('remove') ? require('../src/schedule').remove() : require('../src/schedule').install({ every: Number(opt('every') || 60), profile: opt('profile') }));
