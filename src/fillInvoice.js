@@ -218,7 +218,12 @@ async function run(profile, opts = {}) {
     await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
 
     // header
-    if (cfg.company?.cif) await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`));
+    // company CIF selector: optional (SmartBill UI may not show it for single-company accounts)
+    if (cfg.company?.cif) {
+      const hasCifSelector = await page.locator('#company_cifs').count().catch(() => 0);
+      if (hasCifSelector) { await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`)); result.companyCifSelected = true; }
+      else result.companyCifSelector = 'not-found-skipped';
+    }
     await typeAndPick(page, '#client_name', cf.client.cif.replace(/^RO/i, ''), { hasText: cf.client.cif.replace(/^RO/i, '') });
     await page.waitForTimeout(2500);
     await setDate(page, '', plan.issueDate);
