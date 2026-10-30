@@ -233,6 +233,26 @@ T('D01', 'DOM autocomplete regression (Mentolime/Sokata/SGR)', () => {
   return (r.stdout || '').trim().split('\n').pop();
 });
 
+T('F01', 'forceSelectKnownProduct exportat + Mentolime id in pin', () => {
+  assert(typeof fi.forceSelectKnownProduct === 'function');
+  const m = Object.values(pin).find(p => p.sku === 'mentolime500');
+  assert(m && String(m.id) === '32214943', JSON.stringify(m));
+  const src = fs.readFileSync(path.join(ROOT, 'src/fillInvoice.js'), 'utf8');
+  assert(/productAutocompleteSelect/.test(src), 'missing SmartBill select hook');
+  assert(/force-select|FORCE select/.test(src), 'missing force-select path');
+  assert(/resetProductLineInputs|product_gestiune/.test(src), 'missing gestiune reset');
+  return `mentolime500#${m.id} force-select wired`;
+});
+
+T('F02', 'pickExistingProduct nu arde 20s pe numele lung inainte de force-select', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/fillInvoice.js'), 'utf8');
+  // force-select must appear before "Last resort" name attempts in pickExistingProduct body order
+  const iForce = src.indexOf('FORCE select');
+  const iLast = src.indexOf('Last resort: remaining name attempts');
+  assert(iForce > 0 && iLast > iForce, `order force=${iForce} last=${iLast}`);
+  return 'force before long-name last resort';
+});
+
 T('S01', 'forbiddenValues + KCRF absent din src shipped', () => {
   const { forbiddenValues } = require('../src/selftest');
   const v = forbiddenValues();

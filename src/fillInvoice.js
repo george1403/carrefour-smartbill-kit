@@ -100,17 +100,67 @@ function productAutocompleteItemsScript() {
       const st = getComputedStyle(ul);
       return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
     };
+    // SmartBill select handler is window.productAutocompleteSelect({ item }) — plain .click() on <li>
+    // often leaves #product_name unchanged (Mentolime / Sokata "picked" but fields empty).
+    const itemFromLi = (li) => {
+      try {
+        if (window.$) {
+          const $li = window.$(li);
+          return $li.data('item.autocomplete') || $li.data('ui-autocomplete-item') || $li.data('autocompleteItem') || null;
+        }
+      } catch {}
+      return null;
+    };
+    const selectProductItem = (item, via) => {
+      if (!item || item.id == null) return { ok: false, via };
+      try {
+        if (typeof window.productAutocompleteSelect === 'function') {
+          window.productAutocompleteSelect({ item });
+          return { ok: true, id: String(item.id), text: soft(item.label || item.value || item.name || ''), n: 1, via };
+        }
+      } catch {}
+      return { ok: false, via };
+    };
     const clickLi = (hit) => {
+      const data = itemFromLi(hit);
+      if (data) {
+        const r = selectProductItem(data, 'ac-select');
+        if (r.ok) return r;
+      }
+      // Build minimal item from DOM id + label if SmartBill data missing
+      if (hit.id && /^\d{5,}$/.test(String(hit.id))) {
+        const t = (hit.innerText || hit.textContent || '').replace(/\s+/g, ' ').trim();
+        const codeMatch = /\(([^)]+)\)\s*$/.exec(t);
+        const r = selectProductItem({
+          id: Number(hit.id) || hit.id,
+          label: t,
+          value: t.replace(/\s*\([^)]+\)\s*$/, '').trim(),
+          name: t.replace(/\s*\([^)]+\)\s*$/, '').trim(),
+          code: codeMatch ? codeMatch[1].trim() : (sku || ''),
+          nomenclator: true,
+          is_composed: false,
+          measuring_unit_name: 'buc',
+          is_vat_included: false,
+          is_service: false,
+          additionalData: {},
+        }, 'ac-select-built');
+        if (r.ok) return r;
+      }
       try {
         if (window.$ && window.$(hit).length) {
-          window.$(hit).trigger('mouseenter').click();
+          const $hit = window.$(hit);
+          try { window.$(hit).parent().menu('focus', null, $hit); } catch {}
+          $hit.trigger('mouseenter');
+          $hit.find('a, .ui-menu-item-wrapper').first().click();
+          $hit.click();
         } else {
           hit.scrollIntoView({ block: 'nearest' });
           hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
           hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
           hit.click();
         }
-      } catch { hit.click(); }
+      } catch { try { hit.click(); } catch {} }
+      return { ok: true, id: hit.id, text: label(hit), n: 1, via: 'dom-click' };
     };
 
     // 0) Exact stock id anywhere in autocomplete DOM (most reliable)
@@ -118,8 +168,8 @@ function productAutocompleteItemsScript() {
       const byId = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
         .find(li => String(li.id) === String(id));
       if (byId) {
-        clickLi(byId);
-        return { ok: true, id: byId.id, text: label(byId), n: 1, via: 'dom-id' };
+        const r = clickLi(byId);
+        if (r && r.ok) return { ...r, n: 1 };
       }
     }
 
@@ -127,9 +177,12 @@ function productAutocompleteItemsScript() {
     let items = [];
     let widget = null;
     try {
-      if (input && window.$ && window.$(input).data('ui-autocomplete')) {
-        widget = window.$(input).autocomplete('widget')[0] || null;
-        if (widget) items = [...widget.querySelectorAll('li.ui-menu-item')];
+      if (input && window.$) {
+        const ac = window.$(input).data('ui-autocomplete') || window.$(input).data('autocomplete');
+        if (ac) {
+          widget = window.$(input).autocomplete('widget')[0] || null;
+          if (widget) items = [...widget.querySelectorAll('li.ui-menu-item')];
+        }
       }
     } catch {}
     if (!items.length && input) {
@@ -189,7 +242,8 @@ function productAutocompleteItemsScript() {
       if (idOk || skuOk || nameOk || typedSkuOnly) hit = only;
     }
     if (!hit) return { ok: false, texts: (texts.length ? texts : rawTexts).slice(0, 15), n: items.length || rawTexts.length };
-    clickLi(hit);
+    const picked = clickLi(hit);
+    if (picked && picked.ok) return { ...picked, n: items.length, via: picked.via || 'menu' };
     return { ok: true, id: hit.id, text: label(hit), n: items.length, via: 'menu' };
   };
 }
@@ -201,7 +255,10 @@ async function closeAllAutocompletes(page) {
     try {
       if (window.$) {
         document.querySelectorAll('input').forEach(el => {
-          try { if (window.$(el).data('ui-autocomplete')) window.$(el).autocomplete('close'); } catch {}
+          try {
+            const $el = window.$(el);
+            if ($el.data('ui-autocomplete') || $el.data('autocomplete')) $el.autocomplete('close');
+          } catch {}
         });
       }
     } catch {}
@@ -220,11 +277,82 @@ async function triggerProductSearch(page, inputSel, text) {
     e.dispatchEvent(new Event('keyup', { bubbles: true }));
     e.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', keyCode: 40 }));
     try {
-      if (window.$ && window.$(e).data('ui-autocomplete')) {
-        window.$(e).autocomplete('search', text);
+      if (window.$) {
+        const $e = window.$(e);
+        if ($e.data('ui-autocomplete') || $e.data('autocomplete')) $e.autocomplete('search', text);
       }
     } catch {}
   }, { inputSel, text });
+}
+
+/**
+ * NUCLEAR bypass: call SmartBill's own productAutocompleteSelect with a known stock item.
+ * Works when autocomplete returns items=0 (Mentolime &, gestiune stock filter, slow cache).
+ * Does NOT invent products — requires real SmartBill id + Shopify SKU from match/pin.
+ */
+async function forceSelectKnownProduct(page, { id, sku, name, isService = false }) {
+  const result = await page.evaluate(({ id, sku, name, isService }) => {
+    if (typeof window.productAutocompleteSelect !== 'function') {
+      return { ok: false, err: 'productAutocompleteSelect lipsa' };
+    }
+    const nm = String(name || sku || '').replace(/&amp;/gi, '&').trim();
+    const code = String(sku || '').trim();
+    const item = {
+      label: code ? `${nm} (${code})` : nm,
+      value: nm,
+      name: nm,
+      id: /^\d+$/.test(String(id)) ? Number(id) : id,
+      code,
+      measuring_unit_name: 'buc',
+      price: '',
+      is_vat_included: false,
+      is_service: !!isService,
+      description: '',
+      nomenclator: true,
+      is_composed: false,
+      additionalData: {},
+      hasRecycleWarranty: null,
+      recycleWarranties: null,
+    };
+    try {
+      window.productAutocompleteSelect({ item });
+    } catch (e) {
+      return { ok: false, err: String(e && e.message || e) };
+    }
+    return {
+      ok: true,
+      code: (document.querySelector('#product_code') || {}).value || '',
+      name: (document.querySelector('#product_name') || {}).value || '',
+      via: 'force-select',
+    };
+  }, { id: String(id), sku: sku || '', name: name || '', isService: !!isService });
+  await page.waitForTimeout(T(600));
+  return result;
+}
+
+/** Clear product line inputs between attempts / lines so leftover Mentolime search state dies. */
+async function resetProductLineInputs(page) {
+  await closeAllAutocompletes(page);
+  await page.evaluate(() => {
+    for (const sel of ['#product_name', '#product_code', '#product_description', '#price', '#quantity']) {
+      const e = document.querySelector(sel);
+      if (!e) continue;
+      e.value = '';
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    // Stock-mode search filters to gestiune qty>0 and returns items=0 for valid SKUs (Mentolime).
+    // Prefer "no gestiune" / empty so get_products_cache search runs.
+    try {
+      const g = document.querySelector('#product_gestiune');
+      if (g && g.value && g.value !== '0') {
+        g.value = '0';
+        g.dispatchEvent(new Event('change', { bubbles: true }));
+        if (window.$) try { window.$(g).val('0').trigger('change'); } catch {}
+      }
+    } catch {}
+  }).catch(() => {});
+  await page.waitForTimeout(T(200));
 }
 
 /**
@@ -259,11 +387,14 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
       .some(li => String(li.id) === String(wantId))) return 1;
     const inputEl = document.querySelector(inputSel);
     try {
-      if (inputEl && window.$ && window.$(inputEl).data('ui-autocomplete')) {
-        const w = window.$(inputEl).autocomplete('widget')[0];
-        if (w) {
-          const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
-          if (lis.length) return lis.length;
+      if (inputEl && window.$) {
+        const $in = window.$(inputEl);
+        if ($in.data('ui-autocomplete') || $in.data('autocomplete')) {
+          const w = $in.autocomplete('widget')[0];
+          if (w) {
+            const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
+            if (lis.length) return lis.length;
+          }
         }
       }
     } catch {}
@@ -463,44 +594,92 @@ function pickSearchAttempts(skuRaw, nameRaw) {
 }
 
 /**
- * Pick EXISTING SmartBill stock/SGR service by SKU first (unique), then unique name tokens.
- * Handles &amp;, truncated labels, slow bulk autocomplete. Never invents products.
+ * Verify pick landed on the expected Shopify/SGR SKU (or distinctive name tokens).
+ */
+async function verifyPickedProduct(page, { id, sku, name }) {
+  let codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+  const nameNow = softNorm(await page.inputValue('#product_name').catch(() => ''));
+  const skuOk = !sku || softNorm(codeNow) === softNorm(sku) || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '');
+  const nameToks = softNorm(name || '').replace(/[&+/]/g, ' ').split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'garantie', 'sgr', 'ml', 'buc'].includes(t));
+  const nameOk = nameToks.length >= 1 && nameToks.slice(0, 2).every(t => nameNow.includes(t));
+  if (!skuOk && sku) {
+    await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
+    codeNow = sku;
+  }
+  const ok = softNorm(codeNow) === softNorm(sku) || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '') || nameOk;
+  return { ok, codeNow, nameNow, skuOk, nameOk, id };
+}
+
+/**
+ * Pick EXISTING SmartBill stock/SGR service.
+ * 1) SKU via #product_code / #product_name (short timeout)
+ * 2) NUCLEAR: productAutocompleteSelect with known id+SKU (Mentolime items=0 bypass)
+ * 3) Remaining name-token attempts only if force-select unavailable
+ * Never invents products.
  */
 async function pickExistingProduct(page, l, log) {
   const id = String(l.smartbill.id);
   const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
   const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
+  const isService = !!(l._sgrService || isSgrDepositLine(l) || /^sgr\b/i.test(sku) || /garantie\s*sgr/i.test(name));
   const attempts = pickSearchAttempts(sku, name);
+  // Prefer SKU-only attempts first (fast). Long names with "&" last — they often return items=0.
+  const skuAttempts = attempts.filter(a => softNorm(a.text) === softNorm(sku) || softNorm(a.text).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '') || /^sgr\b/i.test(a.text) || /^(sticla|plastic|sokata|mentolime|ghimbir)/i.test(a.text));
+  const firstWave = (skuAttempts.length ? skuAttempts : attempts.slice(0, 4)).slice(0, 6);
+
+  await resetProductLineInputs(page);
+  await dismissBlockingDialogs(page, log);
 
   let lastErr;
-  for (const a of attempts) {
+  for (const a of firstWave) {
     try {
-      await page.keyboard.press('Escape').catch(() => {});
+      await resetProductLineInputs(page);
       await dismissBlockingDialogs(page, log);
-      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 20000 });
-      await page.waitForTimeout(T(500));
-      let codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
-      const nameNow = softNorm(await page.inputValue('#product_name').catch(() => ''));
-      const skuOk = !sku || softNorm(codeNow) === softNorm(sku);
-      const nameOk = !name || softNorm(name).split(' ').slice(0, 3).every(t => t.length < 2 || nameNow.includes(t.replace(/&/g, '')));
-      if (!skuOk && sku) {
-        // force correct Shopify/SGR SKU on the line (product was picked; code field sometimes empty)
-        await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
-        codeNow = sku;
-      }
-      if (!skuOk && !nameOk && softNorm(codeNow) !== softNorm(sku)) {
-        throw new Error(`dupa click, cod="${codeNow}" nume="${nameNow}" (asteptam SKU ${sku})`);
-      }
-      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || codeNow}" via ${a.field}="${a.text}" (cod=${codeNow || sku}, dd=${used.text || ''})`);
-      return a;
+      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 10000 });
+      await page.waitForTimeout(T(400));
+      const v = await verifyPickedProduct(page, { id, sku, name });
+      if (!v.ok) throw new Error(`dupa click, cod="${v.codeNow}" nume="${v.nameNow}" (asteptam SKU ${sku})`);
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || v.codeNow}" via ${a.field}="${a.text}" (cod=${v.codeNow || sku}, dd=${used.text || ''}, ${used.via || ''})`);
+      return { ...a, via: used.via || 'menu' };
     } catch (e) {
       lastErr = e;
       log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
-      await page.keyboard.press('Escape').catch(() => {});
-      await dismissBlockingDialogs(page, log);
-      await page.waitForTimeout(T(500));
     }
   }
+
+  // Mentolime 922903 etc.: dropdown items=0 — call SmartBill select directly with known stock id.
+  try {
+    await resetProductLineInputs(page);
+    await dismissBlockingDialogs(page, log);
+    log(`Linie pick FORCE select id ${id} SKU "${sku}" (bypass autocomplete items=0)`);
+    const forced = await forceSelectKnownProduct(page, { id, sku, name, isService });
+    if (!forced || !forced.ok) throw new Error(forced && forced.err || 'force-select failed');
+    const v = await verifyPickedProduct(page, { id, sku, name });
+    if (!v.ok) throw new Error(`force-select: cod="${v.codeNow}" nume="${v.nameNow}" (asteptam ${sku})`);
+    log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via force-select (cod=${v.codeNow})`);
+    return { field: '#product_name', text: sku, via: 'force-select' };
+  } catch (e) {
+    lastErr = e;
+    log(`Linie pick force-select id ${id}: ${String(e.message || e).split('\n')[0]}`);
+  }
+
+  // Last resort: remaining name attempts (without burning 20s each)
+  const rest = attempts.filter(a => !firstWave.some(f => f.field === a.field && f.text === a.text)).slice(0, 4);
+  for (const a of rest) {
+    try {
+      await resetProductLineInputs(page);
+      await dismissBlockingDialogs(page, log);
+      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 8000 });
+      const v = await verifyPickedProduct(page, { id, sku, name });
+      if (!v.ok) throw new Error(`dupa click, cod="${v.codeNow}" nume="${v.nameNow}"`);
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via ${a.field}="${a.text}" (fallback name)`);
+      return { ...a, via: used.via || 'menu' };
+    } catch (e) {
+      lastErr = e;
+      log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
+    }
+  }
+
   throw lastErr || new Error(`Nu am putut selecta produsul din stock SmartBill id ${id} (${sku || name})`);
 }
 
@@ -1217,4 +1396,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct };

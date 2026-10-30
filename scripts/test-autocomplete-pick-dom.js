@@ -20,11 +20,20 @@ const { productAutocompleteItemsScript } = (() => {
 
 async function runCase(page, { html, inputSel, id, sku, name, expectOk, expectId }) {
   await page.setContent(html);
-  await page.addScriptTag({ content: 'window.$ = undefined;' }); // no jQuery — force DOM path
+  // Stub SmartBill select + no real jQuery autocomplete — exercise DOM id / built-item path.
+  await page.addScriptTag({ content: `
+    window.$ = undefined;
+    window.__selected = null;
+    window.productAutocompleteSelect = function(t){ window.__selected = t && t.item; };
+  ` });
   const fn = productAutocompleteItemsScript();
   const r = await page.evaluate(fn, { inputSel, id, sku, name });
   if (!!r.ok !== !!expectOk) throw new Error(`ok=${r.ok} expected ${expectOk}: ${JSON.stringify(r)}`);
   if (expectId && String(r.id) !== String(expectId)) throw new Error(`id=${r.id} expected ${expectId}`);
+  if (expectOk && expectId) {
+    const sel = await page.evaluate(() => window.__selected && String(window.__selected.id));
+    if (String(sel) !== String(expectId)) throw new Error(`productAutocompleteSelect not called with id ${expectId}, got ${sel}`);
+  }
   return r;
 }
 
