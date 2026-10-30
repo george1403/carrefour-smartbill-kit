@@ -49,43 +49,21 @@ function previewText(p) {
 async function askYes(q) {
   if (require('./testenv').hook('KIT_BULK_CONFIRM')) return require('./testenv').hook('KIT_BULK_CONFIRM');
   
-  // Simpler approach: write question, read line directly
-  process.stdout.write(q);
+  // Use readline but keep it very simple
+  const readline = require('readline');
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
   
   return new Promise((resolve) => {
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw;
-    const wasPaused = stdin.isPaused();
-    
-    // Ensure stdin is in the right mode
-    if (stdin.setRawMode) stdin.setRawMode(false);
-    stdin.setEncoding('utf8');
-    if (wasPaused) stdin.resume();
-    
-    const cleanup = () => {
-      stdin.removeListener('data', onData);
-      stdin.removeListener('end', onEnd);
-      stdin.pause();
-      if (stdin.setRawMode && wasRaw !== stdin.isRaw) stdin.setRawMode(wasRaw);
-      if (typeof stdin.unref === 'function') stdin.unref();
-    };
-    
-    let buffer = '';
-    const onData = (chunk) => {
-      buffer += chunk;
-      if (buffer.includes('\n')) {
-        cleanup();
-        resolve(buffer.trim());
-      }
-    };
-    
-    const onEnd = () => {
-      cleanup();
-      resolve(buffer.trim());
-    };
-    
-    stdin.on('data', onData);
-    stdin.once('end', onEnd);
+    rl.question(q, (answer) => {
+      rl.close();
+      // Clean up stdin properly
+      process.stdin.pause();
+      if (process.stdin.unref) process.stdin.unref();
+      resolve(answer);
+    });
   });
 }
 

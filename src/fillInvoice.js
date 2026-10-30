@@ -248,7 +248,7 @@ async function run(profile, opts = {}) {
   const result = { out, plan: path.join(out, 'plan.json'), mode: issue ? 'issue' : 'fill-only' };
   try {
     { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: dup.kind === 'unclear' ? 'NEEDS_HUMAN' : 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
-    await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
+    await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForTimeout(7000); await dismissCookies(page);
 
     // header
     // company CIF selector: optional (SmartBill UI may not show it for single-company accounts)

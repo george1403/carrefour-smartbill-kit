@@ -1,0 +1,31 @@
+{
+  "orderNo": "TEST206008",
+  "orderDate": "2026-10-25",
+  "deliveryDate": "2026-10-25",
+  "store": {
+    "gln": "5940475000013",
+    "name": "CARREFOUR BUCURESTI ORHIDEEA",
+    "street": "Str. Test 1",
+    "city": "Bucuresti"
+  },
+  "lines": [
+    {
+      "name": "SGR Garantie Sticla PET",
+      "ean": "9999999999991",
+      "carrefourCode": "SGR001",
+      "qty": 10,
+      "price": 0.50,
+      "vat": 0,
+      "unitCode": "PCE"
+    },
+    {
+      "name": "CARPATHIAN JERKY BEEF ORIGINAL 25G",
+      "ean": "5941005501014",
+      "carrefourCode": "12345",
+      "qty": 5,
+      "price": 8.99,
+      "vat": 11,
+      "unitCode": "PCE"
+    }
+  ]
+}
