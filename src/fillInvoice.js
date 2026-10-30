@@ -147,28 +147,50 @@ async function setProductLineName(page, name) {
 }
 
 /**
- * Pick an EXISTING SmartBill/Shopify product by SKU first (unique), then by denumire.
- * Never invents CF-* codes. Throws if the nomenclator row cannot be selected.
+ * Pick an EXISTING SmartBill stock product (Shopify SKU). Tries id, then name/SKU text in dropdown.
+ * After click, verifies #product_code == SKU so we know we hit the stock row (not a free-text invent).
  */
 async function pickExistingProduct(page, l, log) {
   const id = String(l.smartbill.id);
   const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
   const name = String(l.smartbill.name || l.smartbill.Denumire || '').trim();
+  const nameRe = name ? new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'i') : null;
+  const skuRe = sku ? new RegExp(sku.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') : null;
   const attempts = [];
-  if (sku) attempts.push({ field: '#product_name', text: sku });
-  if (sku) attempts.push({ field: '#product_code', text: sku });
+  // Prefer denumire (autocomplete indexes names better than SKU codes like ghimbirIK500)
   if (name) {
-    const short = name.split(/\s+/).slice(0, 5).join(' ');
-    if (short && short !== sku) attempts.push({ field: '#product_name', text: short });
-    if (name !== short && name !== sku) attempts.push({ field: '#product_name', text: name });
+    const short = name.split(/\s+/).slice(0, 4).join(' ');
+    attempts.push({ field: '#product_name', text: short, filter: nameRe ? { hasText: nameRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+    if (name !== short) attempts.push({ field: '#product_name', text: name, filter: nameRe ? { hasText: nameRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
   }
+  if (sku) {
+    attempts.push({ field: '#product_name', text: sku, filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+    attempts.push({ field: '#product_name', text: sku, filter: skuRe ? { hasText: skuRe } : { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+    attempts.push({ field: '#product_code', text: sku, filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+  }
+  // last resort: id attribute on any of the typed queries
+  if (name) attempts.push({ field: '#product_name', text: name.split(/\s+/).slice(0, 3).join(' '), filter: { has: page.locator(`xpath=self::li[@id="${id}"]`) } });
+
   let lastErr;
   for (const a of attempts) {
     try {
       await page.keyboard.press('Escape').catch(() => {});
       await dismissBlockingDialogs(page, log);
-      await typeAndPick(page, a.field, a.text, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: 18000 });
-      log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via ${a.field}="${a.text}"`);
+      await typeAndPick(page, a.field, a.text, a.filter, { timeout: 12000 });
+      // Confirm we landed on the stock product (SmartBill fills Cod from nomenclator)
+      await page.waitForTimeout(T(600));
+      const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+      const nameNow = ((await page.inputValue('#product_name').catch(() => '')) || '').trim();
+      const skuOk = !sku || codeNow === sku || codeNow.toLowerCase() === sku.toLowerCase();
+      const nameOk = !name || nameNow.toLowerCase().includes(name.toLowerCase().slice(0, 12));
+      if (!skuOk && !nameOk) {
+        throw new Error(`dupa click, cod="${codeNow}" nume="${nameNow}" (asteptam SKU ${sku})`);
+      }
+      if (sku && !skuOk && nameOk) {
+        // name matched but code empty/wrong — force Shopify SKU silently (still existing product pick)
+        await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
+      }
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || codeNow}" via ${a.field}="${a.text}" (cod=${codeNow || sku})`);
       return a;
     } catch (e) {
       lastErr = e;
@@ -177,7 +199,7 @@ async function pickExistingProduct(page, l, log) {
       await dismissBlockingDialogs(page, log);
     }
   }
-  throw lastErr || new Error(`Nu am putut selecta produsul SmartBill id ${id} (${sku || name})`);
+  throw lastErr || new Error(`Nu am putut selecta produsul din stock SmartBill id ${id} (${sku || name})`);
 }
 
 /** True free-text ONLY when no Shopify match exists (e.g. rare SGR). No CF-* codes — those created junk products. */
