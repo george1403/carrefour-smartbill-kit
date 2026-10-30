@@ -177,8 +177,7 @@ async function selectVatCode(page, vatRate) {
     const available = opts.map(o => o.text.trim());
     const availableValues = opts.map(o => String(o.value || '').trim());
     
-    // DEBUG: Log all available options for 0% troubleshooting
-    console.log('DEBUG selectVatCode: all #vat_code options:', JSON.stringify(opts.map(o => ({ t: o.text, v: o.value })), null, 2));
+    if (process.env.KIT_DEBUG) console.log('DEBUG selectVatCode: all #vat_code options:', JSON.stringify(opts.map(o => ({ t: o.text, v: o.value })), null, 2));
     
     // Try multiple SGR patterns: exact name, contains SGR, case-insensitive
     let sgr = available.find(t => /^SGR$/i.test(t.trim()));
@@ -479,7 +478,7 @@ async function run(profile, opts = {}) {
         const id = l.smartbill.id;
         // Prefer Shopify denumire for autocomplete; Carrefour name is applied later via carrefourLineName
         const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 5).join(' ');
-        const pickTimeout = 25000; // fail fast -> free-text (Carrefour line) rather than hang 120s
+        const pickTimeout = 8000; // fail fast -> free-text (Carrefour line); do not hang bulk
         try {
           await typeAndPick(page, '#product_name', pickText, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: pickTimeout });
         } catch (pickErr) {
