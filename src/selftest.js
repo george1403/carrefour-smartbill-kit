@@ -48,6 +48,12 @@ async function run() {
   } catch (e) { no('pin vs nume: ' + e.message); }
   try { const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-automat.js')], { encoding: 'utf8', timeout: 120000 }); const last = (r.stdout || '').trim().split('\n').pop();
     (r.status === 0 ? ok : no)(`mod automat (teste offline, SmartBill simulat, nimic emis): ${last}${r.status === 0 ? '' : ' ' + (r.stdout || '').split('\n').filter(l => /^FAIL/.test(l)).join(' | ').slice(0, 800)}`); } catch (e) { no('mod automat: ' + e.message); }
+  // Full Pure Therapy bypass matrix (match/VAT/pick/SGR/DOM) — works from ZIP via pin stand-in when out/ missing.
+  try {
+    const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-bypass-matrix.js')], { encoding: 'utf8', timeout: 120000 });
+    const last = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
+    (r.status === 0 ? ok : no)(`bypass matrix PT: ${last}${r.status === 0 ? '' : ' ' + (r.stdout || '').split('\n').filter(l => /^FAIL/.test(l)).join(' | ').slice(0, 800)}`);
+  } catch (e) { no('bypass matrix: ' + e.message); }
   try { ok(require('../scripts/test-fresh-setup').run()); } catch (e) { no('setup din ZIP proaspat: ' + e.message.slice(0, 1500)); }
   // No producer-specific values in the files we ship (the kit is the same ZIP for every producer).
   try { const v = forbiddenValues(); (v.length ? no : ok)(`fara date de producator in fisierele kitului${v.length ? ': ' + v.slice(0, 8).join('; ') : ''}`); } catch (e) { no('verificare date producator: ' + e.message); }

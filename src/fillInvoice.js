@@ -38,18 +38,35 @@ async function setField(page, sel, text, { blurTo = '#quantity', pickExact = tru
   return el.inputValue();
 }
 
-async function typeAndPick(page, input, text, liFilter, { timeout = 120000 } = {}) { timeout = T(timeout);
+async function typeAndPick(page, input, text, liFilter, { timeout = 20000 } = {}) { timeout = T(timeout);
   const el = page.locator(input).first();
   await el.click(); await el.fill('');
   await el.pressSequentially(text, { delay: 40 });
   const li = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter(liFilter).first();
   try {
-    await li.waitFor({ state: 'visible', timeout });
+    await li.waitFor({ state: 'visible', timeout: Math.min(timeout, T(8000)) });
+    await li.click();
   } catch (e) {
-    throw new Error(`Timeout waiting for dropdown after typing "${text}" in ${input}. SmartBill slow or element not found (waited ${timeout}ms). Original: ${e.message}`);
+    // DOM fallback (same Mentolime/Sokata class of failure: menu in DOM, :visible lies)
+    const want = String(text || '');
+    const clicked = await page.evaluate((needle) => {
+      const soft = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const n = soft(needle);
+      const hit = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+        .find(li => soft(li.innerText || li.textContent).includes(n));
+      if (!hit) return false;
+      try {
+        hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        hit.click();
+      } catch { try { hit.click(); } catch { return false; } }
+      return true;
+    }, want).catch(() => false);
+    if (!clicked) {
+      throw new Error(`Timeout waiting for dropdown after typing "${text}" in ${input}. SmartBill slow or element not found (waited ${timeout}ms). Original: ${e.message}`);
+    }
   }
-  await li.click();
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(T(900));
 }
 
 /** Decode SmartBill HTML entities in autocomplete labels (&amp; → &, &#x27; → '). */
@@ -382,40 +399,48 @@ async function setProductLineName(page, name) {
 }
 
 /**
- * Pick EXISTING SmartBill stock/SGR service by SKU first (unique), then unique name tokens.
- * Handles &amp;, truncated labels, slow bulk autocomplete. Never invents products.
+ * Search attempts for stock/SGR pick — pure (testable). #product_code first, then name, SKU variants.
+ * Never starts with generic "Furori kombucha …" alone (too many hits / chrome).
  */
-async function pickExistingProduct(page, l, log) {
-  const id = String(l.smartbill.id);
-  const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
-  const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
-  // Unique search strings — #product_code first (narrower autocomplete than name; avoids client/GTIN chrome),
-  // then #product_name with SKU, then distinctive flavor+size. Never generic "Furori kombucha menta".
+function pickSearchAttempts(skuRaw, nameRaw) {
+  const sku = String(skuRaw || '').trim();
+  const name = String(nameRaw || '').replace(/&amp;/gi, '&').trim();
   const attempts = [];
+  const push = (field, text) => {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t) return;
+    if (attempts.some(a => a.field === field && a.text === t)) return;
+    attempts.push({ field, text: t });
+  };
   if (sku) {
-    attempts.push({ field: '#product_code', text: sku });
-    attempts.push({ field: '#product_name', text: sku });
-    // Spaced SKUs ("SGR sticla", "fr pas500"): also try compact form in code field
+    push('#product_code', sku);
+    push('#product_name', sku);
     if (/\s/.test(sku)) {
-      const compact = sku.replace(/\s+/g, '');
-      if (compact !== sku) attempts.push({ field: '#product_code', text: compact });
-      attempts.push({ field: '#product_name', text: sku.replace(/\s+/g, ' ').trim() });
+      push('#product_code', sku.replace(/\s+/g, ''));
+      push('#product_name', sku.replace(/\s+/g, ''));
     }
-    // SGR services: "SGR sticla" / "SGR plastic" — also try short token SmartBill indexes well
+    // "fr pas500" → "fr pas 500", "frpas500"
+    const spacedSize = sku.match(/^(.+?)\s*(\d{3,4})$/i);
+    if (spacedSize && /\s/.test(sku)) {
+      push('#product_code', `${spacedSize[1].trim()} ${spacedSize[2]}`);
+      push('#product_name', `${spacedSize[1].trim()} ${spacedSize[2]}`);
+    }
     if (/^sgr\b/i.test(sku)) {
-      const short = sku.replace(/^sgr\s+/i, '').trim(); // sticla / plastic
+      const short = sku.replace(/^sgr\s+/i, '').trim();
       if (short) {
-        attempts.push({ field: '#product_code', text: `SGR ${short}` });
-        attempts.push({ field: '#product_name', text: `SGR ${short}` });
+        push('#product_code', `SGR ${short}`);
+        push('#product_name', `SGR ${short}`);
+        push('#product_code', short);
+        push('#product_name', short);
       }
-      attempts.push({ field: '#product_name', text: 'SGR' });
+      push('#product_name', 'SGR');
     }
-    // Furori codes: sokataF500 — also try without the F and with space before size
-    const m = sku.match(/^([a-z]+)F?(\d{3,4})$/i);
-    if (m) {
-      attempts.push({ field: '#product_code', text: `${m[1]}${m[2]}` });
-      attempts.push({ field: '#product_name', text: `${m[1]}${m[2]}` });
-      attempts.push({ field: '#product_name', text: `${m[1]} ${m[2]}` });
+    // sokataF500 → sokata500 / "sokata 500" (non-greedy so "F" is the Furori marker, not eaten by [a-z]+)
+    const mF = sku.match(/^([a-z]+?)F(\d{3,4})$/i);
+    if (mF) {
+      push('#product_code', `${mF[1]}${mF[2]}`);
+      push('#product_name', `${mF[1]}${mF[2]}`);
+      push('#product_name', `${mF[1]} ${mF[2]}`);
     }
   }
   if (name) {
@@ -423,19 +448,29 @@ async function pickExistingProduct(page, l, log) {
     const toks = softNorm(name).split(' ').filter(Boolean);
     const sz = (toks.find(t => /^(330|500|750)$/.test(t)) || '');
     const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', '&', sz].includes(t) && !/^\d+$/.test(t));
-    // Prefer distinctive mid-name: "menta & lamaie 500" / "sokata 500"
     if (flavor.length >= 2 && sz) {
-      attempts.push({ field: '#product_name', text: `${flavor[0]} & ${flavor[1]} ${sz}` });
-      attempts.push({ field: '#product_name', text: `${flavor[0]} ${flavor[1]} ${sz}` });
+      push('#product_name', `${flavor[0]} & ${flavor[1]} ${sz}`);
+      push('#product_name', `${flavor[0]} ${flavor[1]} ${sz}`);
     }
-    if (flavor.length && sz) attempts.push({ field: '#product_name', text: `${flavor.slice(0, 2).join(' ')} ${sz}` });
-    if (flavor.length === 1 && sz) attempts.push({ field: '#product_name', text: `${flavor[0]} ${sz}` });
-    if (flavor.length >= 2) attempts.push({ field: '#product_name', text: flavor.slice(0, 3).join(' ') });
-    // Keep original & spelling as last resorts
+    if (flavor.length && sz) push('#product_name', `${flavor.slice(0, 2).join(' ')} ${sz}`);
+    if (flavor.length === 1 && sz) push('#product_name', `${flavor[0]} ${sz}`);
+    if (flavor.length >= 2) push('#product_name', flavor.slice(0, 3).join(' '));
     const withAmp = name.replace(/\s+/g, ' ').trim();
-    attempts.push({ field: '#product_name', text: withAmp.split(/\s+/).slice(0, 5).join(' ') });
-    attempts.push({ field: '#product_name', text: withAmp.split(/\s+/).slice(0, 7).join(' ') });
+    push('#product_name', withAmp.split(/\s+/).slice(0, 5).join(' '));
+    push('#product_name', withAmp.split(/\s+/).slice(0, 7).join(' '));
   }
+  return attempts;
+}
+
+/**
+ * Pick EXISTING SmartBill stock/SGR service by SKU first (unique), then unique name tokens.
+ * Handles &amp;, truncated labels, slow bulk autocomplete. Never invents products.
+ */
+async function pickExistingProduct(page, l, log) {
+  const id = String(l.smartbill.id);
+  const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
+  const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
+  const attempts = pickSearchAttempts(sku, name);
 
   let lastErr;
   for (const a of attempts) {
@@ -492,51 +527,53 @@ async function selectByText(page, sel, re) {
   await page.selectOption(sel, val); await page.waitForTimeout(500);
   return val;
 }
-/** Select VAT rate with 0% SGR/SDD mapping: 0% lines -> "SGR" first, fallback "SDD", never bare "0%". */
-async function selectVatCode(page, vatRate) {
+
+/**
+ * Pure VAT picker for SmartBill option labels (Pure Therapy: "21 %", "0 % - SGR", "0 % - SDD", …).
+ * 0% → SGR first, then SDD, then any 0%; never prefer bare "0 %" over named SGR/SDD.
+ */
+function resolveVatOption(availableTexts, vatRate) {
+  const available = (availableTexts || []).map(t => String(t || '').trim()).filter(Boolean);
   const rate = Number(vatRate);
-  // For 0% (SGR deposit guarantee / packaging), map to SmartBill cota "SGR" first, fallback "SDD"
   if (rate === 0) {
-    const opts = await page.$$eval('#vat_code option', opts => opts.map(o => ({ text: o.text, value: o.value })));
-    const available = opts.map(o => o.text.trim());
-    const availableValues = opts.map(o => String(o.value || '').trim());
-    
-    if (process.env.KIT_DEBUG) console.log('DEBUG selectVatCode: all #vat_code options:', JSON.stringify(opts.map(o => ({ t: o.text, v: o.value })), null, 2));
-    
-    // Try multiple SGR patterns: exact name, contains SGR, case-insensitive
-    let sgr = available.find(t => /^SGR$/i.test(t.trim()));
-    if (!sgr) sgr = available.find(t => /SGR/i.test(t));
-    if (!sgr && availableValues.includes('SGR')) sgr = 'SGR'; // by value
-    
-    if (sgr) { 
-      await selectByText(page, '#vat_code', new RegExp(sgr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')); 
-      return `SGR (matched: ${sgr})`; 
-    }
-    
-    // Fallback to SDD: try exact, contains, and common 0% exempt names
-    let sdd = available.find(t => /^SDD$/i.test(t.trim()));
-    if (!sdd) sdd = available.find(t => /SDD/i.test(t));
-    if (!sdd) sdd = available.find(t => /scutit.*taxa|exempt/i.test(t) && /0\s*%/.test(t));
-    if (!sdd && availableValues.includes('SDD')) sdd = 'SDD';
-    
-    if (sdd) { 
-      await selectByText(page, '#vat_code', new RegExp(sdd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')); 
-      return `SDD (matched: ${sdd})`; 
-    }
-    
-    // Last resort: any 0% option
-    const zero = available.find(t => /^0\s*%/i.test(t.trim()));
-    if (zero) {
-      console.log(`DEBUG: Using generic 0% option: "${zero}"`);
-      await selectByText(page, '#vat_code', new RegExp(`^${zero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
-      return `0% (${zero})`;
-    }
-    
-    // Neither SGR nor SDD exist: detailed error with actual options
-    throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Opțiuni disponibile: ${available.join(', ')}. Adaugă o cotă numită "SGR" la 0% / E - Scutit în SmartBill (Configurare > Cote TVA).`), { code: 'NEEDS_HUMAN', availableOptions: available });
+    const sgr = available.find(t => /^SGR$/i.test(t))
+      || available.find(t => /0\s*%\s*-\s*SGR/i.test(t))
+      || available.find(t => /\bSGR\b/i.test(t));
+    if (sgr) return { kind: 'SGR', text: sgr };
+    const sdd = available.find(t => /^SDD$/i.test(t))
+      || available.find(t => /0\s*%\s*-\s*SDD/i.test(t))
+      || available.find(t => /\bSDD\b/i.test(t))
+      || available.find(t => /scutit.*taxa|exempt/i.test(t) && /0\s*%/.test(t));
+    if (sdd) return { kind: 'SDD', text: sdd };
+    const zero = available.find(t => /^0\s*%/i.test(t));
+    if (zero) return { kind: '0%', text: zero };
+    return { kind: null, text: null, available };
   }
-  // Non-zero rates: original logic (11%, 21%, etc. match by percentage text)
-  await selectByText(page, '#vat_code', new RegExp(`^${vatRate}\\s*%$`));
+  const exact = available.find(t => new RegExp(`^${rate}\\s*%$`).test(t));
+  if (exact) return { kind: 'rate', text: exact };
+  // "21 % - Normal" / "21%" with trailing note
+  const prefix = available.find(t => new RegExp(`^${rate}\\s*%`).test(t));
+  if (prefix) return { kind: 'rate', text: prefix };
+  return { kind: null, text: null, available };
+}
+
+/** Select VAT rate with 0% SGR/SDD mapping: 0% lines -> "SGR" first, fallback "SDD", never bare "0%" over SGR. */
+async function selectVatCode(page, vatRate) {
+  const opts = await page.$$eval('#vat_code option', opts => opts.map(o => ({ text: o.text, value: o.value })));
+  const available = opts.map(o => o.text.trim());
+  if (process.env.KIT_DEBUG) console.log('DEBUG selectVatCode options:', JSON.stringify(available));
+  const resolved = resolveVatOption(available, vatRate);
+  if (!resolved || !resolved.text) {
+    if (Number(vatRate) === 0) {
+      throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Opțiuni disponibile: ${available.join(', ')}. Adaugă o cotă numită "SGR" la 0% / E - Scutit în SmartBill (Configurare > Cote TVA).`), { code: 'NEEDS_HUMAN', availableOptions: available });
+    }
+    throw Object.assign(new Error(`Cota de TVA ceruta de comanda (${vatRate}%) nu exista in SmartBill. Verifica cotele TVA in SmartBill (Configurare > Taxe) si comanda in portal. Opțiuni: ${available.join(', ')}`), { code: 'NEEDS_HUMAN', availableOptions: available });
+  }
+  const esc = resolved.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await selectByText(page, '#vat_code', new RegExp(`^\\s*${esc}`));
+  if (resolved.kind === 'SGR') return `SGR (matched: ${resolved.text})`;
+  if (resolved.kind === 'SDD') return `SDD (matched: ${resolved.text})`;
+  if (resolved.kind === '0%') return `0% (${resolved.text})`;
   return `${vatRate}%`;
 }
 
@@ -1180,4 +1217,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit };
