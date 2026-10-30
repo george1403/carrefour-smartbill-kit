@@ -52,6 +52,15 @@ async function typeAndPick(page, input, text, liFilter, { timeout = 120000 } = {
   await page.waitForTimeout(1200);
 }
 
+/** Carrefour pieces: SmartBill UI often shows PCE; e-Factura / some products show XPP (UNECE). Same meaning. */
+function sameCarrefourUnit(a, b) {
+  const n = s => String(s || '').trim().toUpperCase();
+  const piece = new Set(['PCE', 'XPP', 'A', 'BUC', 'BUC.', 'PCS', 'EA', 'H87', 'C62']);
+  const aa = n(a), bb = n(b);
+  if (aa === bb) return true;
+  return piece.has(aa) && piece.has(bb);
+}
+
 /** Carrefour already sends SGR deposit as its own 0% line (GARANTIE PET/STICLA/SGR).
  *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line). */
 function isSgrDepositLine(l) {
@@ -90,14 +99,51 @@ async function disableStockDischarge(page, log) {
   return info;
 }
 
+/** Force #product_name to Carrefour description (BT-153). Autocomplete often clears the field on blur -> empty name error. */
+async function setProductLineName(page, name) {
+  const want = String(name || '');
+  await page.keyboard.press('Escape').catch(() => {});
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.evaluate(v => {
+      const e = document.querySelector('#product_name');
+      if (!e) return;
+      e.focus();
+      e.value = v;
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+      e.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      // hide jQuery UI autocomplete if open (do not pick an item)
+      try { if (window.$) window.$(e).autocomplete('close'); } catch {}
+    }, want);
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(T(300));
+    // blur without relying on autocomplete selection
+    await page.locator('#quantity').click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(T(400));
+    let got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() === want.trim()) return got;
+    // SmartBill cleared it: type again more slowly
+    const pn = page.locator('#product_name');
+    await pn.click(); await pn.fill('');
+    await pn.pressSequentially(want, { delay: 25 });
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.locator('#price').click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(T(500));
+    // re-force after blur if emptied
+    got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() !== want.trim()) {
+      await page.evaluate(v => { const e = document.querySelector('#product_name'); if (e) { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, want);
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+    got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() === want.trim()) return got;
+  }
+  return (await page.inputValue('#product_name').catch(() => '')) || '';
+}
+
 /** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
 async function fillFreeTextProduct(page, l, i, result) {
-  const pn = page.locator('#product_name');
-  await pn.click(); await pn.fill('');
-  await pn.pressSequentially(String(l.name), { delay: 30 });
-  await page.waitForTimeout(T(1500));
-  // Blur to dismiss autocomplete without picking a SmartBill product (avoids auto-SGR side effects)
-  await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
+  await setProductLineName(page, l.name);
   if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) {
     await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
   }
@@ -443,11 +489,27 @@ async function run(profile, opts = {}) {
       // BT-153 line name = Carrefour description, typed over the picked product's name ON THIS LINE ONLY.
       // The product itself is never renamed: the line is sent with add_product=false / id=null (see below + gate).
       if (cfg.smartbill?.carrefourLineName && l.name) {
-        const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 40 }); await page.waitForTimeout(1500);
-        await page.locator('#price').click(); await page.waitForTimeout(1000);
-        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
-        if (result.afterName.name !== String(l.name)) throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name})`);
-        if (cfg.smartbill?.carrefourUnit && result.afterName.um !== cfg.smartbill.carrefourUnit) throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        const already = ((await page.inputValue('#product_name').catch(() => '')) || '').trim();
+        const got = already === String(l.name).trim() ? already : await setProductLineName(page, l.name);
+        // re-apply unit / buyer code / price if SmartBill reset them while renaming the line
+        if (cfg.smartbill?.carrefourUnit) {
+          const umNow = ((await page.inputValue('#measuring_unit').catch(() => '')) || '').trim();
+          if (!sameCarrefourUnit(umNow, cfg.smartbill.carrefourUnit)) {
+            await setField(page, '#measuring_unit', cfg.smartbill.carrefourUnit, { blurTo: '#quantity' });
+          }
+        }
+        if (l.carrefourCode && !(await bt156.inputValue().catch(() => ''))) await bt156.fill(String(l.carrefourCode));
+        if (String(await page.inputValue('#price')) !== String(l.price) && Number(await page.inputValue('#price')) !== Number(l.price)) {
+          await page.fill('#price', String(l.price));
+        }
+        result.afterName = { name: got, code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
+        if (String(result.afterName.name || '').trim() !== String(l.name).trim()) {
+          throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name || ''}) — SmartBill a golit campul dupa scriere; reincerca.`);
+        }
+        // PCE (SmartBill display) and XPP (e-Factura UNECE) are the same Carrefour "bucati" unit
+        if (cfg.smartbill?.carrefourUnit && !sameCarrefourUnit(result.afterName.um, cfg.smartbill.carrefourUnit)) {
+          throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
