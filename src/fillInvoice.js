@@ -59,6 +59,37 @@ function isSgrDepositLine(l) {
   return /GARANTIE|SGR|\bPET\b|\bSTICLA\b|\bSTICL[AĂ]\b/i.test(String(l.name || '') + ' ' + String(l.carrefourCode || '') + ' ' + String(l.ean || ''));
 }
 
+/** Uncheck "Descarca gestiune" so free-text/SGR lines without stock can save as draft. */
+async function disableStockDischarge(page, log) {
+  const info = await page.evaluate(() => {
+    const candidates = [
+      ...document.querySelectorAll('input[type=checkbox][name*="descarca" i], input[type=checkbox][id*="descarca" i], input[type=checkbox][name*="gestiune" i], input[type=checkbox][id*="gestiune" i]'),
+    ];
+    // also match by nearby label text
+    for (const inp of document.querySelectorAll('input[type=checkbox]')) {
+      const lab = (inp.labels && inp.labels[0] && inp.labels[0].innerText) || '';
+      const near = (inp.parentElement && inp.parentElement.innerText) || '';
+      if (/descarc[aă].*gestiune|gestiune.*descarc/i.test(lab + ' ' + near)) candidates.push(inp);
+    }
+    const seen = new Set(); const out = [];
+    for (const el of candidates) {
+      if (!el || seen.has(el)) continue; seen.add(el);
+      out.push({ id: el.id || null, name: el.name || null, checked: !!el.checked });
+      if (el.checked) {
+        el.checked = false;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (typeof window.$ === 'function') try { window.$(el).prop('checked', false).trigger('change'); } catch {}
+      }
+    }
+    return out;
+  });
+  if (info.length) log(`Descarcare gestiune: debifat pentru linii free-text/SGR (${info.map(x => (x.id || x.name || '?') + '=' + x.checked).join(', ')})`);
+  else log('Descarcare gestiune: nu am gasit checkbox (salvez oricum; SmartBill poate cere stoc)');
+  await page.waitForTimeout(T(400));
+  return info;
+}
+
 /** Type Carrefour name as free-text invoice line (never saved to nomenclator; never enables auto-SGR). */
 async function fillFreeTextProduct(page, l, i, result) {
   const pn = page.locator('#product_name');
@@ -450,6 +481,13 @@ async function run(profile, opts = {}) {
     result.form = await page.evaluate(() => ({ rows: [...document.querySelectorAll('table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()).filter(t => /\d/.test(t)).slice(0, 20),
       totals: (document.body.innerText.match(/Total[^\n]{0,80}/gi) || []).slice(0, 8) }));
 
+    // Free-text / SGR deposit lines have no stock in gestiune. SmartBill rejects save with:
+    // "Nu ai facut nicio achizitie pentru produsul X... emite fara descarcare de gestiune."
+    // Uncheck stock discharge before Spre salvare when any such line is present.
+    if (plan.lines.some(l => l.freeText || isSgrDepositLine(l))) {
+      result.descarcaGestiune = await disableStockDischarge(page, log);
+    }
+
     if (opts.probeSave && !issue) {
       await page.click('#saveInvoiceBtn'); await page.waitForTimeout(4000); result.probeShot = await shot('40-dupa-spre-salvare-BLOCAT');
       result.probe = await page.evaluate(() => [...document.querySelectorAll('button, a.btn, .modal:not([style*="none"]) *')].filter(e => e.offsetParent && /btn/.test(e.className) && e.innerText.trim()).map(e => `${e.tagName}#${e.id} ${e.innerText.trim().slice(0, 60)} .${String(e.className).slice(0, 50)}`).slice(0, 60));
@@ -512,14 +550,15 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   let jb = null; try { jb = JSON.parse(body || ''); } catch {}
   const m = jb && jb.id ? [null, String(jb.id)] : (after.match(/\/(?:raport|compact-view)\/factura\/(\d+)/) || (body || '').match(/factura\/(\d+)/) || []);
   const num = (info.title.match(/nr\.?\s*0*(\d+)/i) || [])[1] || null;
+  const sbErr = jb && (jb.errorText || jb.message) ? String(jb.errorText || jb.message).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : null;
   const rec = { status: jb && jb.successfully ? (jb.is_draft ? 'draft-saved' : 'issued') : 'unknown', at: new Date().toISOString(), httpStatus: resp ? resp.status() : null, invoiceId: m[1] || null, number: num, urlBefore: before, urlAfter: after,
-    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
+    responseSnippet: (body || '').slice(0, 1500), smartbillError: sbErr || null, writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
   L[order.orderNo] = rec; save();
   rec.shot = await shot(draftOnly ? '50-ciorna-salvata' : '50-factura-emisa');
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
-  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
+  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId, smartbillError: sbErr || undefined })}`);
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}${sbErr ? ': ' + sbErr : ''}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {
