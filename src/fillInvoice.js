@@ -60,40 +60,69 @@ function softNorm(s) {
 }
 
 /**
- * Type into product field and click the BEST autocomplete row for this stock product.
- * SmartBill often keeps the ul in DOM with items but Playwright :visible fails (opacity/offscreen).
- * Wait for item COUNT, then click via DOM (id / SKU / name tokens + size).
+ * Collect product autocomplete rows for ONE input only.
+ * Bug 30.10.2026 (Sokata 206008): querying ALL ul.ui-autocomplete on the page mixed in
+ * leftover client / SGR / unit / GTIN menus → "6 items" that never matched stock.
+ * Prefer jQuery UI widget tied to the field; fall back to the nearest shown product menu.
  */
-async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeout = 20000 } = {}) {
-  timeout = T(timeout);
-  const el = page.locator(input).first();
-  await el.click(); await el.fill('');
-  await el.pressSequentially(text, { delay: 35 });
-  // Wait until autocomplete has any li — do NOT require Playwright :visible (fails with items>0)
-  const deadline = Date.now() + timeout;
-  let n = 0;
-  while (Date.now() < deadline) {
-    n = await page.evaluate(() => document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item').length).catch(() => 0);
-    if (n > 0) break;
-    await page.waitForTimeout(T(250));
-  }
-  if (!n) throw new Error(`Dropdown lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
-  await page.waitForTimeout(T(350));
-  let clicked = await page.evaluate(({ id, sku, name }) => {
+function productAutocompleteItemsScript() {
+  return ({ inputSel, id, sku, name }) => {
     const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    // Take ALL autocomplete lis (even if parent not "visible" to Playwright)
-    let items = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')];
-    // Prefer ones in a displayed ul; if none, use all
-    const shown = items.filter(li => {
-      const ul = li.closest('ul');
-      if (!ul) return true;
+    const noise = t => {
+      const x = soft(t);
+      if (!x) return true;
+      if (/^adauga client|client-add-new|carrefour romania|garantie sgr|sgr plastic|sgr sticla/.test(x)) return true;
+      if (/^(pce|xpp|buc|kg|lei|ron)$/.test(x)) return true;
+      if (/^0160\b|gtin|global trade item/.test(x)) return true;
+      return false;
+    };
+    const shown = (ul) => {
+      if (!ul) return false;
       const st = getComputedStyle(ul);
-      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
-    });
-    if (shown.length) items = shown;
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0
+        && ul.getClientRects().length > 0;
+    };
+    const input = document.querySelector(inputSel);
+    let items = [];
+    // 1) jQuery UI widget bound to this exact field
+    try {
+      if (input && window.$ && window.$(input).data('ui-autocomplete')) {
+        const w = window.$(input).autocomplete('widget')[0];
+        if (w && shown(w)) items = [...w.querySelectorAll('li.ui-menu-item')];
+      }
+    } catch {}
+    // 2) aria-owns / autocomplete attr on the input
+    if (!items.length && input) {
+      const owns = input.getAttribute('aria-owns') || input.getAttribute('aria-controls');
+      if (owns) {
+        const w = document.getElementById(owns);
+        if (w && shown(w)) items = [...w.querySelectorAll('li.ui-menu-item')];
+      }
+    }
+    // 3) only shown product menus — drop client-add / unit / GTIN chrome
+    if (!items.length) {
+      const uls = [...document.querySelectorAll('ul.ui-autocomplete')].filter(shown);
+      for (const ul of uls) {
+        const lis = [...ul.querySelectorAll('li.ui-menu-item')];
+        const texts = lis.map(li => soft(li.innerText || li.textContent || ''));
+        const looksProduct = lis.some(li => li.id && /^\d{5,}$/.test(String(li.id)))
+          || texts.some(t => t && !noise(t) && t.length > 8);
+        const looksClient = lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))
+          || texts.some(t => /carrefour romania|adauga client/.test(t));
+        if (looksClient && !looksProduct) continue;
+        if (lis.length && lis.every(li => noise(li.innerText || li.textContent || ''))) continue;
+        items = lis;
+        break;
+      }
+    }
+    items = items.filter(li => !noise(li.innerText || li.textContent || ''));
     const texts = items.map(li => ({ id: li.id || '', text: soft(li.innerText || li.textContent || '') }));
     let hit = id && items.find(li => String(li.id) === String(id));
-    if (!hit && sku) hit = items.find(li => soft(li.id) === soft(sku) || soft(li.innerText).includes(soft(sku)));
+    if (!hit && sku) {
+      const sk = soft(sku);
+      hit = items.find(li => soft(li.id) === sk || soft(li.innerText).includes(sk)
+        || (/\(([^)]+)\)\s*$/.test(li.innerText || '') && soft(RegExp.$1) === sk));
+    }
     if (!hit && name) {
       const nrm = soft(name).replace(/[&+/]/g, ' ');
       const toks = nrm.split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'si', 'cu', 'de'].includes(t));
@@ -105,7 +134,6 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
         return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
       });
     }
-    // NEVER click "only item" unless it clearly matches id/sku/name — numeric SKUs can return unrelated singles
     if (!hit && items.length === 1) {
       const only = items[0];
       const t = soft(only.innerText || only.textContent || '');
@@ -115,7 +143,6 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
       if (idOk || skuOk || nameOk) hit = only;
     }
     if (!hit) return { ok: false, texts: texts.slice(0, 15), n: items.length };
-    // jQuery UI select if available (more reliable than raw click)
     try {
       if (window.$ && window.$(hit).length) {
         window.$(hit).trigger('mouseenter').click();
@@ -129,9 +156,83 @@ async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeou
       hit.click();
     }
     return { ok: true, id: hit.id, text: soft(hit.innerText || hit.textContent || ''), n: items.length };
-  }, { id: id || null, sku: sku || null, name: name || null });
+  };
+}
+
+async function closeAllAutocompletes(page) {
+  await page.evaluate(() => {
+    try {
+      if (window.$) {
+        document.querySelectorAll('input').forEach(el => {
+          try { if (window.$(el).data('ui-autocomplete')) window.$(el).autocomplete('close'); } catch {}
+        });
+      }
+    } catch {}
+    document.querySelectorAll('ul.ui-autocomplete').forEach(ul => {
+      ul.style.display = 'none';
+    });
+  }).catch(() => {});
+  await page.keyboard.press('Escape').catch(() => {});
+}
+
+/**
+ * Type into product field and click the BEST autocomplete row for this stock product.
+ * SmartBill often keeps the ul in DOM with items but Playwright :visible fails (opacity/offscreen).
+ * Wait for item COUNT on THIS field's menu, then click via DOM (id / SKU / name tokens + size).
+ */
+async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeout = 20000 } = {}) {
+  timeout = T(timeout);
+  await closeAllAutocompletes(page);
+  const el = page.locator(input).first();
+  await el.click(); await el.fill('');
+  await el.pressSequentially(text, { delay: 35 });
+  const deadline = Date.now() + timeout;
+  let n = 0;
+  const countForField = async () => page.evaluate(({ inputSel }) => {
+    const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim().toLowerCase();
+    const noise = t => {
+      const x = soft(t);
+      return !x || /^adauga client|carrefour romania|garantie sgr|sgr plastic|sgr sticla/.test(x)
+        || /^(pce|xpp|buc|kg|lei|ron)$/.test(x) || /^0160\b|gtin|global trade item/.test(x);
+    };
+    const shown = (ul) => {
+      if (!ul) return false;
+      const st = getComputedStyle(ul);
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0
+        && ul.getClientRects().length > 0;
+    };
+    const inputEl = document.querySelector(inputSel);
+    try {
+      if (inputEl && window.$ && window.$(inputEl).data('ui-autocomplete')) {
+        const w = window.$(inputEl).autocomplete('widget')[0];
+        if (w && shown(w)) {
+          return [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || '')).length;
+        }
+      }
+    } catch {}
+    // visible non-noise menus only (avoid counting client leftover as "ready")
+    let best = 0;
+    for (const ul of document.querySelectorAll('ul.ui-autocomplete')) {
+      if (!shown(ul)) continue;
+      const lis = [...ul.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || ''));
+      if (lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))) continue;
+      best = Math.max(best, lis.length);
+    }
+    return best;
+  }, { inputSel: input }).catch(() => 0);
+
+  while (Date.now() < deadline) {
+    n = await countForField();
+    if (n > 0) break;
+    await page.waitForTimeout(T(250));
+  }
+  if (!n) throw new Error(`Dropdown produs lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
+  await page.waitForTimeout(T(350));
+  let clicked = await page.evaluate(productAutocompleteItemsScript(), {
+    inputSel: input, id: id || null, sku: sku || null, name: name || null,
+  });
   if (!clicked || !clicked.ok) {
-    throw new Error(`Dropdown are ${clicked && clicked.n || n} iteme dar niciunul nu e stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
+    throw new Error(`Dropdown produs are ${clicked && clicked.n || n} iteme dar niciunul nu e stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
   }
   await page.waitForTimeout(T(900));
   return clicked;
@@ -245,6 +346,12 @@ async function pickExistingProduct(page, l, log) {
   if (sku) {
     attempts.push({ field: '#product_name', text: sku });
     attempts.push({ field: '#product_code', text: sku });
+    // Furori codes: sokataF500 — also try without the F and with space before size
+    const m = sku.match(/^([a-z]+)F?(\d{3,4})$/i);
+    if (m) {
+      attempts.push({ field: '#product_name', text: `${m[1]}${m[2]}` });
+      attempts.push({ field: '#product_name', text: `${m[1]} ${m[2]}` });
+    }
   }
   if (name) {
     // "menta & lamaie 500" / "sokata 500" / "SGR plastic"
@@ -252,6 +359,7 @@ async function pickExistingProduct(page, l, log) {
     const sz = (toks.find(t => /^(330|500|750)$/.test(t)) || '');
     const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', sz].includes(t) && !/^\d+$/.test(t));
     if (flavor.length && sz) attempts.push({ field: '#product_name', text: `${flavor.slice(0, 2).join(' ')} ${sz}` });
+    if (flavor.length === 1 && sz) attempts.push({ field: '#product_name', text: `${flavor[0]} ${sz}` });
     if (flavor.length >= 2) attempts.push({ field: '#product_name', text: flavor.slice(0, 3).join(' ') });
     // last: first 3 words without &
     const words = name.replace(/&/g, ' ').split(/\s+/).filter(w => w && w !== '&');
@@ -1002,4 +1110,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct };

@@ -160,12 +160,17 @@ function matchLine(line, products, pinned = {}) {
   if (pin) {
     const p = findBySkuOrId(products, pin);
     if (p) {
+      // Pin SKU from issued KCRF is source of truth (never trust a drifted Shopify Cod like sokataP*).
       return {
         id: String(p.id),
-        name: p.Denumire || p.name,
-        code: p.Cod || p.code,
+        name: pin.name || p.Denumire || p.name,
+        code: pin.sku || p.Cod || p.code,
         how: 'stocKCRF',
       };
+    }
+    // Pin known but product list stale — still return pin so pick types the real stock SKU.
+    if (pin.id && pin.sku) {
+      return { id: String(pin.id), name: pin.name || null, code: pin.sku, how: 'stocKCRF-pinOnly' };
     }
   }
 
