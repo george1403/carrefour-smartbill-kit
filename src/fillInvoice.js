@@ -67,15 +67,44 @@ async function selectVatCode(page, vatRate) {
   const rate = Number(vatRate);
   // For 0% (SGR deposit guarantee / packaging), map to SmartBill cota "SGR" first, fallback "SDD"
   if (rate === 0) {
-    const available = await page.$$eval('#vat_code option', opts => opts.map(o => o.text.trim()));
-    // Try SGR first (deposit return, garanție returabilă)
-    const sgr = available.find(t => /^\s*SGR\b/i.test(t));
-    if (sgr) { await selectByText(page, '#vat_code', /^\s*SGR\b/i); return 'SGR'; }
-    // Fallback to SDD (0% scutit de taxa)
-    const sdd = available.find(t => /^\s*SDD\b/i.test(t));
-    if (sdd) { await selectByText(page, '#vat_code', /^\s*SDD\b/i); return 'SDD'; }
-    // Neither SGR nor SDD exist: original error
-    throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Adaugă o cotă numită "SGR" la 0% / E - Scutit de taxă în SmartBill (Configurare > Cote TVA), sau "SDD" ca alternativă.`), { code: 'NEEDS_HUMAN' });
+    const opts = await page.$$eval('#vat_code option', opts => opts.map(o => ({ text: o.text, value: o.value })));
+    const available = opts.map(o => o.text.trim());
+    const availableValues = opts.map(o => String(o.value || '').trim());
+    
+    // DEBUG: Log all available options for 0% troubleshooting
+    console.log('DEBUG selectVatCode: all #vat_code options:', JSON.stringify(opts.map(o => ({ t: o.text, v: o.value })), null, 2));
+    
+    // Try multiple SGR patterns: exact name, contains SGR, case-insensitive
+    let sgr = available.find(t => /^SGR$/i.test(t.trim()));
+    if (!sgr) sgr = available.find(t => /SGR/i.test(t));
+    if (!sgr && availableValues.includes('SGR')) sgr = 'SGR'; // by value
+    
+    if (sgr) { 
+      await selectByText(page, '#vat_code', new RegExp(sgr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')); 
+      return `SGR (matched: ${sgr})`; 
+    }
+    
+    // Fallback to SDD: try exact, contains, and common 0% exempt names
+    let sdd = available.find(t => /^SDD$/i.test(t.trim()));
+    if (!sdd) sdd = available.find(t => /SDD/i.test(t));
+    if (!sdd) sdd = available.find(t => /scutit.*taxa|exempt/i.test(t) && /0\s*%/.test(t));
+    if (!sdd && availableValues.includes('SDD')) sdd = 'SDD';
+    
+    if (sdd) { 
+      await selectByText(page, '#vat_code', new RegExp(sdd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')); 
+      return `SDD (matched: ${sdd})`; 
+    }
+    
+    // Last resort: any 0% option
+    const zero = available.find(t => /^0\s*%/i.test(t.trim()));
+    if (zero) {
+      console.log(`DEBUG: Using generic 0% option: "${zero}"`);
+      await selectByText(page, '#vat_code', new RegExp(`^${zero.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'));
+      return `0% (${zero})`;
+    }
+    
+    // Neither SGR nor SDD exist: detailed error with actual options
+    throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Opțiuni disponibile: ${available.join(', ')}. Adaugă o cotă numită "SGR" la 0% / E - Scutit în SmartBill (Configurare > Cote TVA).`), { code: 'NEEDS_HUMAN', availableOptions: available });
   }
   // Non-zero rates: original logic (11%, 21%, etc. match by percentage text)
   await selectByText(page, '#vat_code', new RegExp(`^${vatRate}\\s*%$`));
