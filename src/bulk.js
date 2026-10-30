@@ -48,10 +48,45 @@ function previewText(p) {
 
 async function askYes(q) {
   if (require('./testenv').hook('KIT_BULK_CONFIRM')) return require('./testenv').hook('KIT_BULK_CONFIRM');
-  const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY });
-  // after the answer stdin must be released: a closed readline leaves process.stdin readable+ref'd -> the process never exits (menu 9 hung after 'nu')
-  const release = () => { try { process.stdin.pause(); if (typeof process.stdin.unref === 'function') process.stdin.unref(); } catch {} };
-  return new Promise(r => { let done = false; rl.question(q, a => { done = true; rl.close(); release(); r(a); }); rl.on('close', () => { release(); if (!done) r(''); }); });
+  
+  // Simpler approach: write question, read line directly
+  process.stdout.write(q);
+  
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    const wasPaused = stdin.isPaused();
+    
+    // Ensure stdin is in the right mode
+    if (stdin.setRawMode) stdin.setRawMode(false);
+    stdin.setEncoding('utf8');
+    if (wasPaused) stdin.resume();
+    
+    const cleanup = () => {
+      stdin.removeListener('data', onData);
+      stdin.removeListener('end', onEnd);
+      stdin.pause();
+      if (stdin.setRawMode && wasRaw !== stdin.isRaw) stdin.setRawMode(wasRaw);
+      if (typeof stdin.unref === 'function') stdin.unref();
+    };
+    
+    let buffer = '';
+    const onData = (chunk) => {
+      buffer += chunk;
+      if (buffer.includes('\n')) {
+        cleanup();
+        resolve(buffer.trim());
+      }
+    };
+    
+    const onEnd = () => {
+      cleanup();
+      resolve(buffer.trim());
+    };
+    
+    stdin.on('data', onData);
+    stdin.once('end', onEnd);
+  });
 }
 
 /**
