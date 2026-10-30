@@ -229,17 +229,19 @@ function productAutocompleteItemsScript() {
         return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
       });
     }
-    // Single leftover row after a SKU/name search — accept if not chrome
+    // Single leftover row after a SKU/name search — accept only if id/SKU matches (never junk PET/sticla alone)
     if (!hit && items.length === 1) {
       const only = items[0];
       const t = label(only);
       const idOk = id && String(only.id) === String(id);
-      const skuOk = sku && soft(sku).length >= 3 && (t.includes(soft(sku)) || soft(only.id) === soft(sku));
+      const skuOk = sku && soft(sku).length >= 3 && (t.includes(soft(sku)) || soft(only.id) === soft(sku)
+        || (/\(([^)]+)\)\s*$/.test(only.innerText || only.textContent || '') && soft(RegExp.$1) === soft(sku)));
       const nameToks = soft(name || '').replace(/[&+/]/g, ' ').split(' ').filter(x => x.length > 3 && !['furori', 'kombucha', 'ikombucha'].includes(x));
       const nameOk = nameToks.length >= 2 && nameToks.slice(0, 2).every(tok => t.includes(tok));
-      // After typing exact SKU, SmartBill often returns exactly one stock row — take it if it has a stock id
-      const typedSkuOnly = sku && soft(sku).length >= 3 && only.id && /^\d{5,}$/.test(String(only.id));
-      if (idOk || skuOk || nameOk || typedSkuOnly) hit = only;
+      // Exact SKU typed into #product_code: one stock row with matching id OR label containing SKU
+      const typedExactSku = sku && soft(sku).length >= 3 && only.id && /^\d{5,}$/.test(String(only.id))
+        && (idOk || skuOk || soft(t).includes(soft(sku)));
+      if (idOk || skuOk || (nameOk && id && String(only.id) === String(id)) || typedExactSku) hit = only;
     }
     if (!hit) return { ok: false, texts: (texts.length ? texts : rawTexts).slice(0, 15), n: items.length || rawTexts.length };
     const picked = clickLi(hit);
@@ -290,8 +292,8 @@ async function triggerProductSearch(page, inputSel, text) {
  * Works when autocomplete returns items=0 (Mentolime &, gestiune stock filter, slow cache).
  * Does NOT invent products — requires real SmartBill id + Shopify SKU from match/pin.
  */
-async function forceSelectKnownProduct(page, { id, sku, name, isService = false }) {
-  const result = await page.evaluate(({ id, sku, name, isService }) => {
+async function forceSelectKnownProduct(page, { id, sku, name, isService = false, unit = 'PCE' }) {
+  const result = await page.evaluate(({ id, sku, name, isService, unit }) => {
     if (typeof window.productAutocompleteSelect !== 'function') {
       return { ok: false, err: 'productAutocompleteSelect lipsa' };
     }
@@ -303,7 +305,7 @@ async function forceSelectKnownProduct(page, { id, sku, name, isService = false 
       name: nm,
       id: /^\d+$/.test(String(id)) ? Number(id) : id,
       code,
-      measuring_unit_name: 'buc',
+      measuring_unit_name: String(unit || 'PCE'),
       price: '',
       is_vat_included: false,
       is_service: !!isService,
@@ -325,7 +327,7 @@ async function forceSelectKnownProduct(page, { id, sku, name, isService = false 
       name: (document.querySelector('#product_name') || {}).value || '',
       via: 'force-select',
     };
-  }, { id: String(id), sku: sku || '', name: name || '', isService: !!isService });
+  }, { id: String(id), sku: sku || '', name: name || '', isService: !!isService, unit: unit || 'PCE' });
   await page.waitForTimeout(T(600));
   return result;
 }
@@ -585,20 +587,25 @@ function pickSearchAttempts(skuRaw, nameRaw) {
 }
 
 /**
- * Verify pick landed on the expected Shopify/SGR SKU (or distinctive name tokens).
+ * Verify pick landed on the expected Shopify/SGR SKU (or known stock id).
+ * NEVER rewrite #product_code on mismatch — that hid junk PET/sticla picks behind the right SKU.
  */
 async function verifyPickedProduct(page, { id, sku, name }) {
-  let codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+  const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
   const nameNow = softNorm(await page.inputValue('#product_name').catch(() => ''));
-  const skuOk = !sku || softNorm(codeNow) === softNorm(sku) || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '');
+  const skuOk = !!(sku && (softNorm(codeNow) === softNorm(sku)
+    || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '')));
+  // Optional: confirm stock id from SmartBill internal product form state when exposed
+  const idNow = await page.evaluate(() => {
+    const e = document.querySelector('#product_id, input[name="product_id"], #id_product');
+    return e ? String(e.value || '').trim() : null;
+  }).catch(() => null);
+  const idOk = !!(id && idNow && String(idNow) === String(id));
   const nameToks = softNorm(name || '').replace(/[&+/]/g, ' ').split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'garantie', 'sgr', 'ml', 'buc'].includes(t));
-  const nameOk = nameToks.length >= 1 && nameToks.slice(0, 2).every(t => nameNow.includes(t));
-  if (!skuOk && sku) {
-    await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, sku);
-    codeNow = sku;
-  }
-  const ok = softNorm(codeNow) === softNorm(sku) || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '') || nameOk;
-  return { ok, codeNow, nameNow, skuOk, nameOk, id };
+  const nameOk = nameToks.length >= 2 && nameToks.slice(0, 2).every(t => nameNow.includes(t));
+  // Accept only SKU match, or id match with name tokens (never name-only — junk GARANTIE STICLA passes "sticla")
+  const ok = skuOk || (idOk && nameOk);
+  return { ok, codeNow, nameNow, skuOk, nameOk, idOk, id };
 }
 
 /**
@@ -643,7 +650,8 @@ async function pickExistingProduct(page, l, log) {
     await resetProductLineInputs(page);
     await dismissBlockingDialogs(page, log);
     log(`Linie pick FORCE select id ${id} SKU "${sku}" (bypass autocomplete items=0)`);
-    const forced = await forceSelectKnownProduct(page, { id, sku, name, isService });
+    const unit = isService ? 'buc' : 'PCE';
+    const forced = await forceSelectKnownProduct(page, { id, sku, name, isService, unit });
     if (!forced || !forced.ok) throw new Error(forced && forced.err || 'force-select failed');
     const v = await verifyPickedProduct(page, { id, sku, name });
     if (!v.ok) throw new Error(`force-select: cod="${v.codeNow}" nume="${v.nameNow}" (asteptam ${sku})`);
@@ -952,12 +960,15 @@ async function run(profile, opts = {}) {
   const plan = { order, issueDate: todayIso(), dueDate: addDays(todayIso(), cfg.smartbill?.dueDays || 7), series: cfg.smartbill?.series,
     despatchId: order.despatchId || rnd15(), clientCif: cf.client.cif, lines: [] };
   for (const l of order.lines) {
-    const m = matchLine(l, products, pinned);
+    let m = matchLine(l, products, pinned);
     // SGR must resolve to existing services SGR plastic / SGR sticla — never invent a new GARANTIE line
-    if (isSgrDepositLine(l) && (!m || m.ambiguous)) {
-      throw Object.assign(new Error(
-        `Linia SGR "${l.name}" (EAN ${l.ean}): trebuie serviciul existent „Garantie SGR Plastic” (cod SGR plastic) sau „Garantie SGR Sticla” (cod SGR sticla). Nu creez produs nou.`
-      ), { code: 'NEEDS_HUMAN' });
+    if (isSgrDepositLine(l)) {
+      const code = m && !m.ambiguous ? String(m.code || m.Cod || '').trim() : '';
+      if (!m || m.ambiguous || !/^SGR\b/i.test(code)) {
+        throw Object.assign(new Error(
+          `Linia SGR "${l.name}" (EAN ${l.ean}): trebuie serviciul existent „Garantie SGR Plastic” (cod SGR plastic) sau „Garantie SGR Sticla” (cod SGR sticla). Nu creez produs nou${code ? ` (gasit cod "${code}")` : ''}.`
+        ), { code: 'NEEDS_HUMAN' });
+      }
     }
     // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
     // SGR is never free-text — only real drink SKUs may free-text-fallback when unmatched (rare)
@@ -987,6 +998,25 @@ async function run(profile, opts = {}) {
     }
     await typeAndPick(page, '#client_name', cf.client.cif.replace(/^RO/i, ''), { hasText: cf.client.cif.replace(/^RO/i, '') });
     await page.waitForTimeout(2500);
+    {
+      const wantCif = String(cf.client.cif || '').replace(/^RO/i, '');
+      const clientCheck = await page.evaluate((want) => {
+        const dig = s => String(s || '').replace(/\D/g, '');
+        const fields = ['#client_cif', '#client_vat_code', 'input[name="client_cif"]', '#cif'];
+        let cif = '';
+        for (const sel of fields) {
+          const e = document.querySelector(sel);
+          if (e && e.value) { cif = e.value; break; }
+        }
+        const name = ((document.querySelector('#client_name') || {}).value || '').trim();
+        const bodyHit = dig(document.body.innerText || '').includes(dig(want));
+        return { cif, name, ok: dig(cif).includes(dig(want)) || (dig(want) && bodyHit && /carrefour/i.test(name)) };
+      }, wantCif);
+      result.clientCheck = clientCheck;
+      if (!clientCheck.ok) {
+        throw new Error(`Clientul selectat nu e Carrefour (CIF asteptat ${cf.client.cif}, gasit cif="${clientCheck.cif}" name="${clientCheck.name}")`);
+      }
+    }
     await setDate(page, '', plan.issueDate);
     // due date typed directly (choosing "7 zile" in the list pops a "default term for this client" notice)
     await setDate(page, 'due', plan.dueDate);
@@ -1150,6 +1180,22 @@ async function run(profile, opts = {}) {
           throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
         }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        // BT-153 rename can reset VAT (SGR services often default to SDD) — re-select and assert
+        const vatWant = resolveVatOption(await page.$$eval('#vat_code option', opts => opts.map(o => (o.text || '').trim()).filter(Boolean)), l.vat);
+        const vatNow = result.afterName.vat;
+        if (vatWant && softNorm(vatNow) !== softNorm(vatWant)) {
+          const reselected = await selectVatCode(page, l.vat);
+          result.afterName.vat = reselected;
+          result.afterName.vatReselected = true;
+          if (softNorm(reselected) !== softNorm(vatWant)) {
+            throw new Error(`TVA s-a schimbat dupa numele liniei: este "${reselected}", trebuia "${vatWant}"`);
+          }
+        }
+        const qtyNow = ((await page.inputValue('#quantity').catch(() => '')) || '').trim();
+        if (Number(qtyNow) !== Number(l.qty)) {
+          await page.fill('#quantity', String(l.qty));
+          result.afterName.qtyRestored = true;
+        }
       }
       // Product mapping for Carrefour:
       //  - PICK existing SmartBill/Shopify product (SKU as Cod)
@@ -1213,6 +1259,19 @@ async function run(profile, opts = {}) {
         rows: await page.evaluate(() => (window.products || []).length) });
       { const err = page.locator('.swal2-popup:visible, .modal:visible, .ui-dialog:visible').filter({ hasText: /Au aparut erori/i });
         if (await err.count()) { const t = (await err.first().innerText()).replace(/\s+/g, ' ').trim(); throw new Error(`SmartBill nu a adaugat linia ${i + 1} (${l.name}): ${t}`); } }
+      // Assert qty/price landed on the invoice row (rename / dialogs can silently drop them)
+      {
+        const row = await page.evaluate(() => {
+          const rows = (window.products || []).filter(p => !p.is_discount);
+          const p = rows[rows.length - 1];
+          if (!p) return null;
+          return { qty: p.quantity, price: p.price, name: p.product_name, code: p.product_code };
+        });
+        if (!row) throw new Error(`Linia ${i + 1} (${l.name}): dupa Add, window.products e gol`);
+        if (Number(row.qty) !== Number(l.qty)) throw new Error(`Linia ${i + 1} (${l.name}): cantitate pe factura=${row.qty}, trebuia ${l.qty}`);
+        if (Number(row.price) !== Number(l.price)) throw new Error(`Linia ${i + 1} (${l.name}): pret pe factura=${row.price}, trebuia ${l.price}`);
+        (result.afterAddAssert = result.afterAddAssert || []).push({ line: i + 1, ...row });
+      }
       // "Doresti sa salvezi / actualizezi produsul in Nomenclator?" -> always "Nu"
       const ask = page.locator('.ui-dialog:visible, .modal:visible, .swal2-popup:visible').filter({ hasText: /Introducere in nomenclator|Actualiz.*nomenclator|salvezi produsul|modific.*nomenclator/i });
       if (await ask.count()) {
@@ -1255,10 +1314,11 @@ async function run(profile, opts = {}) {
     result.form = await page.evaluate(() => ({ rows: [...document.querySelectorAll('table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()).filter(t => /\d/.test(t)).slice(0, 20),
       totals: (document.body.innerText.match(/Total[^\n]{0,80}/gi) || []).slice(0, 8) }));
 
-    // Free-text / SGR deposit lines have no stock in gestiune. SmartBill rejects save with:
-    // "Nu ai facut nicio achizitie pentru produsul X... emite fara descarcare de gestiune."
-    // Uncheck stock discharge before Spre salvare when any such line is present.
-    if (plan.lines.some(l => l.freeText || isSgrDepositLine(l))) {
+    // Free-text / SGR / Carrefour-renamed lines (stock id detached) have no gestiune link.
+    // SmartBill rejects save with: "Nu ai facut nicio achizitie... emite fara descarcare de gestiune."
+    const needsNoDischarge = plan.lines.some(l => l.freeText || isSgrDepositLine(l))
+      || (result.nomenclatorGate && result.nomenclatorGate.state || []).some(st => !st.id && !st.is_discount);
+    if (needsNoDischarge) {
       result.descarcaGestiune = await disableStockDischarge(page, log);
     }
 
@@ -1291,10 +1351,36 @@ function checkDraftXml(x, order, unitCode = 'XPP') {
   const items = [...x.matchAll(/<cac:InvoiceLine\b[^>]*>([\s\S]*?)<\/cac:InvoiceLine>/g)].map(m => m[1]);
   const names = items.map(b => ((b.match(/<cac:Item>[\s\S]*?<cbc:Name>([^<]*)<\/cbc:Name>/) || [])[1] || '').trim());
   const units = items.map(b => (b.match(/<cbc:InvoicedQuantity[^>]*unitCode="([^"]+)"/) || [])[1] || null);
+  const qtys = items.map(b => parseFloat(((b.match(/<cbc:InvoicedQuantity[^>]*>([^<]*)<\/cbc:InvoicedQuantity>/) || [])[1] || '').replace(',', '.')));
+  const prices = items.map(b => {
+    const net = (b.match(/<cbc:PriceAmount[^>]*>([^<]*)<\/cbc:PriceAmount>/) || [])[1];
+    const line = (b.match(/<cbc:LineExtensionAmount[^>]*>([^<]*)<\/cbc:LineExtensionAmount>/) || [])[1];
+    return { net: parseFloat(String(net || '').replace(',', '.')), line: parseFloat(String(line || '').replace(',', '.')) };
+  });
   const want = order.lines.map(l => xmlEsc(String(l.name).trim()));
-  return { [String(order.orderNo).replace(/^0+/, '')]: x.includes(String(order.orderNo).replace(/^0+/, '')), [order.store.gln]: x.includes(String(order.store.gln)),
+  const linesWithQty = order.lines.filter(l => l.qty != null && Number(l.qty) > 0);
+  const linesWithPrice = order.lines.filter(l => l.price != null && Number(l.price) > 0);
+  const qtyOk = !linesWithQty.length || order.lines.every((l, i) => {
+    if (l.qty == null) return true;
+    const q = qtys[i];
+    return Number.isFinite(q) && Math.abs(q - Number(l.qty)) < 0.001;
+  });
+  const priceOk = !linesWithPrice.length || order.lines.every((l, i) => {
+    if (l.price == null) return true;
+    const p = prices[i];
+    if (!p || !Number.isFinite(p.net)) return false;
+    // PriceAmount is unit net; allow tiny float noise
+    if (Math.abs(p.net - Number(l.price)) < 0.02) return true;
+    // Some exporters put VAT-inclusive; accept line extension ≈ qty*price
+    if (l.qty != null && Number.isFinite(p.line) && Math.abs(p.line - Number(l.qty) * Number(l.price)) < 0.05) return true;
+    return false;
+  });
+  const out = { [String(order.orderNo).replace(/^0+/, '')]: x.includes(String(order.orderNo).replace(/^0+/, '')), [order.store.gln]: x.includes(String(order.store.gln)),
     [`linii=${want.length}`]: items.length === want.length, 'nume linie = descriere Carrefour (BT-153)': want.length > 0 && want.every(w => names.includes(w)),
     [`U.M. ${unitCode}`]: units.length > 0 && units.every(u => u === unitCode) };
+  if (linesWithQty.length) out['cantitati = comanda'] = qtyOk;
+  if (linesWithPrice.length) out['preturi = comanda'] = priceOk;
+  return out;
 }
 
 const kerr = (code, msg, extra = {}) => Object.assign(new Error(msg), { code, ...extra });
@@ -1462,4 +1548,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct };

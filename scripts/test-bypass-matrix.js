@@ -79,6 +79,39 @@ T('M04', 'Conflict Sokata-nume + socIK-EAN → sokataF500 (nu socIK)', () => {
   return m.code + ' ' + m.how;
 });
 
+T('M05b', 'Ghimbiruta-nume + Mentolime-EAN → ghimbirutaF500 (nu ghimbirIK)', () => {
+  const mEan = Object.keys(pin).find(k => pin[k].sku === 'mentolime500');
+  const m = matchLine({ name: 'KOMBUCHA GHIMBIRUTA 500ML', ean: mEan, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'ghimbirutaF500', JSON.stringify(m));
+  return m.how;
+});
+
+T('M05c', 'Ghimbiruta fara EAN → Furori ghimbirutaF500 (nu IK)', () => {
+  const m = matchLine({ name: 'KOMBUCHA GHIMBIRUTA 500ML', ean: null, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'ghimbirutaF500', JSON.stringify(m));
+  return m.code + ' ' + m.how;
+});
+
+T('M05d', 'Profil pin gresit (IK id) pe Ghimbiruta → cade pe stocPin Furori', () => {
+  const gEan = Object.keys(pin).find(k => pin[k].sku === 'ghimbirutaF500');
+  const ik = (disc.products || []).find(p => String(p.Cod) === 'ghimbirIK500');
+  assert(ik, 'need ghimbirIK500 in catalog for this gate');
+  const m = matchLine({ name: 'KOMBUCHA GHIMBIRUTA 500ML', ean: gEan, vat: 21 }, disc.products, { [gEan]: String(ik.id) });
+  assert(m && m.code === 'ghimbirutaF500' && m.how === 'stocPin', JSON.stringify(m));
+  return 'wrong profil ignored';
+});
+
+T('M05e', 'SGR: catalog doar junk PET/sticla → null (NEEDS_HUMAN)', () => {
+  const junk = [
+    { id: 1, Cod: 'PET', Denumire: 'GARANTIE PET', 'Cota TVA': '0' },
+    { id: 2, Cod: 'sticla', Denumire: 'GARANTIE STICLA', 'Cota TVA': '0' },
+    { id: 3, Cod: '3162', Denumire: 'GARANTIE PET', 'Cota TVA': '0' },
+  ];
+  const m = matchLine({ name: 'GARANTIE SGR PET', ean: 'x', vat: 0 }, junk, {});
+  assert(m == null, JSON.stringify(m));
+  return 'junk SGR catalog → null';
+});
+
 T('M05', 'pinAgrees: toate perechile exclusive de gust se resping reciproc', () => {
   const pairs = [
     [{ name: 'KOMBUCHA MENTOLIME 500ML' }, pin[Object.keys(pin).find(k => pin[k].sku === 'ghimbirutaF500')]],
@@ -230,6 +263,19 @@ T('U02', 'checkDraftXml: &amp; in nume Mentolime + XPP', () => {
   return 'XML Mentolime OK';
 });
 
+T('U03', 'checkDraftXml: qty/price mismatch → FAIL; corect → OK', () => {
+  const o = { orderNo: '1', store: { gln: '594' }, lines: [{ name: 'A', qty: 6, price: 12.5 }] };
+  const good = `<i>1 594<cac:InvoiceLine><cbc:InvoicedQuantity unitCode="XPP">6</cbc:InvoicedQuantity>
+    <cac:Price><cbc:PriceAmount>12.5</cbc:PriceAmount></cac:Price>
+    <cbc:LineExtensionAmount>75</cbc:LineExtensionAmount>
+    <cac:Item><cbc:Name>A</cbc:Name></cac:Item></cac:InvoiceLine></i>`;
+  const badQty = good.replace('>6</cbc:InvoicedQuantity>', '>2</cbc:InvoicedQuantity>');
+  const g = checkDraftXml(good, o); const b = checkDraftXml(badQty, o);
+  assert(Object.values(g).every(Boolean), JSON.stringify(g));
+  assert(b['cantitati = comanda'] === false, JSON.stringify(b));
+  return 'qty/price XML gate OK';
+});
+
 T('D01', 'DOM autocomplete regression (Mentolime/Sokata/SGR)', () => {
   const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts/test-autocomplete-pick-dom.js')], { encoding: 'utf8', timeout: 60000 });
   assert(r.status === 0, (r.stdout + r.stderr).slice(-400));
@@ -266,8 +312,23 @@ T('N01', 'Nomenclator: dupa rename Carrefour NU reataseaza id (altfel redenumest
   assert(/function applyNomenclatorSafetyGate/.test(src), 'shared gate fn missing');
   assert(/Nomenclator gate pre-salvare/.test(src), 'pre-save re-gate missing in issueNow');
   assert(/ensureLineGestiune/.test(src), 'gestiune ensure missing');
+  assert(/TVA s-a schimbat dupa numele liniei|vatReselected/.test(src), 'VAT reselect after rename missing');
+  assert(/cantitate pe factura=/.test(src), 'qty assert after Add missing');
+  assert(/NEVER rewrite #product_code on mismatch|nu rescrie/.test(src) || !/if \(!skuOk && sku\) \{\s*await page\.evaluate\(v => \{ const e = document\.querySelector\('#product_code'\); if \(e\) e\.value = v; \}/.test(src), 'verifyPickedProduct must not rewrite SKU');
   assert(typeof fi.applyNomenclatorSafetyGate === 'function');
   return 'nomenclator detach + pre-save gate + gestiune ensure OK';
+});
+
+T('V06', 'verifyPickedProduct: nameOk-only pe junk sticla → NOT ok (fara rescriere SKU)', async () => {
+  const { chromium } = require('playwright');
+  const b = await chromium.launch({ headless: true });
+  const page = await b.newPage();
+  await page.setContent(`<input id="product_code" value="sticla"/><input id="product_name" value="GARANTIE STICLA"/>`);
+  const v = await fi.verifyPickedProduct(page, { id: '53098697', sku: 'SGR sticla', name: 'Garantie SGR Sticla' });
+  await b.close();
+  assert(v.ok === false, JSON.stringify(v));
+  assert(v.codeNow === 'sticla', 'must not rewrite code to SGR sticla');
+  return 'junk sticla rejected';
 });
 
 T('N02', 'applyNomenclatorSafetyGate: rename → id null + add_product false (unit, mock page)', async () => {

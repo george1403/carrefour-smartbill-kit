@@ -61,9 +61,36 @@ function isJunkMirror(p, line) {
   if (/^CF-/i.test(code)) return true;
   const codeDig = digits(code);
   if (gtin(code) || (codeDig.length >= 8 && codeDig.length <= 14)) return true;
+  // Polluted PT nomenclator rows from earlier kit runs (not real SGR services)
+  if (/^(PET|3162|3164|sticla|plastic)$/i.test(code)) return true;
+  if (/^GARANTIE\b/i.test(name) && !/^SGR\b/i.test(code)) return true;
   if (/^KOMBUCHA\b/i.test(name) && /^(PET|3162|3164)$/i.test(code)) return true;
+  // Carrefour portal-shaped Denumire on a non-pin SKU = free-text junk left in nomenclator
   if (/^KOMBUCHA\s+[A-Z]+\s+\d+ML$/i.test(name.trim()) && line && norm(name) === norm(line.name)) return true;
+  if (/^KOMBUCHA\s+[A-Z]+\s+\d+ML$/i.test(name.trim()) && !/F\d{3,4}$|mentolime|zmeura|fr\s*pas|sokata/i.test(code)) return true;
   return false;
+}
+
+/**
+ * Carrefour Furori SKUs (*F / mentolime / zmeura / fr pas) vs ikombucha (*IK).
+ * GHIMBIRUTA must never fuzzy-pick ghimbirIK*; SOKATA never socIK.
+ */
+function brandFamilyAgree(line, p) {
+  const L = norm(line && line.name);
+  const code = String(p.Cod ?? p.code ?? '').trim();
+  const name = String(p.Denumire || p.name || '');
+  const P = norm(`${name} ${code}`);
+  if (!L) return true;
+  const isIk = /IK\d|ikombucha|^[a-z]+IK\b/i.test(code) || /^ikombucha/i.test(name);
+  const isFurori = /Furori|sokataF|zmeura\d|fr\s*pas|ghimbirutaF|mentolime/i.test(code + ' ' + name)
+    || /F\d{3,4}$/i.test(code);
+  // Portal Carrefour drink names that belong to Furori stock, not IK classics
+  if (/GHIMBIRUTA|SOKATA|ZMEURIKA|MENTOLIME|PASSION|PASIUN/.test(L)) {
+    if (isIk && !isFurori) return false;
+  }
+  // Classic IK portal names should not pick Furori *F
+  if (/\bSOC\b/.test(L) && !/SOKATA/.test(L) && isFurori && /sokataF/i.test(code)) return false;
+  return true;
 }
 
 /**
@@ -138,6 +165,7 @@ function score(line, p) {
   let s = 0; const why = [];
 
   if (isJunkMirror(p, line)) { s -= 120; why.push('junkMirror'); }
+  if (!brandFamilyAgree(line, p)) { s -= 100; why.push('brandFamily'); }
 
   const lt = expand(tokens(line.name));
   const pt = expand(tokens(name));
@@ -158,8 +186,9 @@ function score(line, p) {
   if (line.vat != null && Number.isFinite(vat) && vat === Number(line.vat)) { s += 15; why.push(`TVA ${vat}%`); }
   if (Number(line.vat) === 0 && /SGR/i.test(vatRaw)) { s += 10; why.push('cotaSGR'); }
   if (Number(line.vat) === 0 && /^SGR\b/i.test(code)) { s += 40; why.push('sgrSku'); }
-  if (Number(line.vat) === 0 && /PET/i.test(line.name || '') && /plastic/i.test(code + ' ' + name)) { s += 30; why.push('petPlastic'); }
-  if (Number(line.vat) === 0 && /STICL/i.test(line.name || '') && /sticla/i.test(code + ' ' + name)) { s += 30; why.push('sticlaSku'); }
+  // Prefer real SGR services; junk PET/sticla codes already junkMirrored
+  if (Number(line.vat) === 0 && /PET/i.test(line.name || '') && /^SGR\s*plastic$/i.test(code)) { s += 30; why.push('petPlastic'); }
+  if (Number(line.vat) === 0 && /STICL/i.test(line.name || '') && /^SGR\s*sticla$/i.test(code)) { s += 30; why.push('sticlaSku'); }
 
   if (BUNDLE.test(name)) s -= 60;
 
@@ -177,12 +206,20 @@ function score(line, p) {
 }
 
 function matchLine(line, products, pinned = {}) {
-  // 1) Explicit profile pin
+  // 1) Explicit profile pin — must agree on flavor/size and resolve to a real Cod
   const pk = line.ean != null && (pinned[line.ean] != null ? line.ean : Object.keys(pinned).find(k => gtin(k) && gtin(k) === gtin(line.ean)));
   if (pk != null && pk !== false && pinned[pk] != null) {
     const id = String(pinned[pk]);
     const p = products.find(x => String(x.id) === id);
-    return { id, name: p && (p.Denumire || p.name), code: p && (p.Cod || p.code), how: 'profil' };
+    if (p && !isJunkMirror(p, line)) {
+      const code = String(p.Cod || p.code || '').trim();
+      const name = String(p.Denumire || p.name || '').trim();
+      const pinLike = { id, sku: code, name };
+      if (code && name && pinAgreesWithLine(line, pinLike) && brandFamilyAgree(line, p)) {
+        return { id, name, code, how: 'profil' };
+      }
+    }
+    // Stale/wrong profile pin → fall through to stocPin / fuzzy (never return empty SKU)
   }
 
   // 2) Hard pin from issued stock invoices = their real SmartBill products
@@ -206,12 +243,20 @@ function matchLine(line, products, pinned = {}) {
     }
   }
 
-  // 3) Fuzzy fallback — still never junk / EVA-first
+  // 3) Fuzzy fallback — still never junk / EVA-first / wrong brand family
   const ranked = products
     .map(p => ({ p, ...score(line, p) }))
-    .filter(r => r.s >= 40 && !isJunkMirror(r.p, line))
+    .filter(r => r.s >= 40 && !isJunkMirror(r.p, line) && brandFamilyAgree(line, r.p))
     .sort((a, b) => b.s - a.s || (b.brand || 0) - (a.brand || 0));
   if (!ranked.length) return null;
+
+  // SGR deposit lines: only accept real SGR* service codes
+  if (Number(line.vat) === 0 && /GARANTIE|SGR|PET|STICL/i.test(String(line.name || ''))) {
+    const sgrOnly = ranked.filter(r => /^SGR\b/i.test(String(r.p.Cod ?? r.p.code ?? '').trim()));
+    if (!sgrOnly.length) return null;
+    ranked.length = 0;
+    ranked.push(...sgrOnly);
+  }
 
   if (ranked[1] && ranked[1].s === ranked[0].s) {
     const same = ranked.filter(r => r.s === ranked[0].s);
@@ -226,4 +271,4 @@ function matchLine(line, products, pinned = {}) {
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
-module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, loadEanPin, pinAgreesWithLine };
+module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, pinAgreesWithLine };
