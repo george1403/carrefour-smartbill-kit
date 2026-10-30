@@ -86,6 +86,34 @@ T('M05b', 'Ghimbiruta-nume + Mentolime-EAN → ghimbirutaF500 (nu ghimbirIK)', (
   return m.how;
 });
 
+T('M05b2', 'IKOMBUCHA GHIMBIR + ghimbiruta-EAN → ghimbirIK500 (nu Furori)', () => {
+  const gEan = Object.keys(pin).find(k => pin[k].sku === 'ghimbirutaF500');
+  const m = matchLine({ name: 'IKOMBUCHA GHIMBIR 500ML', ean: gEan, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'ghimbirIK500', JSON.stringify(m));
+  return m.how;
+});
+
+T('M05b3', 'ikombucha menta + mentolime-EAN → menta500 (nu mentolime)', () => {
+  const mEan = Object.keys(pin).find(k => pin[k].sku === 'mentolime500');
+  const m = matchLine({ name: 'ikombucha menta 500 ml', ean: mEan, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'menta500', JSON.stringify(m));
+  return m.code + ' ' + m.how;
+});
+
+T('M05b4', 'PASSION nu mapeaza pe EVA mango+fr pas', () => {
+  const m = matchLine({ name: 'KOMBUCHA PASSION 500ML', ean: null, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'fr pas500', JSON.stringify(m));
+  assert(!/^EVA/i.test(m.code));
+  return m.how;
+});
+
+T('M05b5', 'IKOMBUCHA SOC + sokata-EAN → socIK500 (nu sokataF; stocPin respectă brandFamily)', () => {
+  const sEan = Object.keys(pin).find(k => pin[k].sku === 'sokataF500');
+  const m = matchLine({ name: 'IKOMBUCHA SOC 500ML', ean: sEan, vat: 21 }, disc.products, {});
+  assert(m && m.code === 'socIK500', JSON.stringify(m));
+  return m.how;
+});
+
 T('M05c', 'Ghimbiruta fara EAN → Furori ghimbirutaF500 (nu IK)', () => {
   const m = matchLine({ name: 'KOMBUCHA GHIMBIRUTA 500ML', ean: null, vat: 21 }, disc.products, {});
   assert(m && m.code === 'ghimbirutaF500', JSON.stringify(m));
@@ -99,6 +127,19 @@ T('M05d', 'Profil pin gresit (IK id) pe Ghimbiruta → cade pe stocPin Furori', 
   const m = matchLine({ name: 'KOMBUCHA GHIMBIRUTA 500ML', ean: gEan, vat: 21 }, disc.products, { [gEan]: String(ik.id) });
   assert(m && m.code === 'ghimbirutaF500' && m.how === 'stocPin', JSON.stringify(m));
   return 'wrong profil ignored';
+});
+
+T('M05f', 'Profil PT: EAN gresit pe fiecare linie → totusi SKU corect (flavorKey bidirectional)', () => {
+  const products = profile.products || [];
+  if (!products.length) return 'skip (fara profil)';
+  const fails = [];
+  for (const p of products) {
+    const wrongEan = Object.keys(pin).find(k => pin[k].sku !== p.smartbillCode && !/SGR|plastic|sticla/i.test(pin[k].sku));
+    const m = matchLine({ name: p.carrefourName, ean: wrongEan, vat: p.vat }, disc.products, {});
+    if (!m || m.ambiguous || m.code !== p.smartbillCode) fails.push(`${p.carrefourName}→${JSON.stringify(m)}`);
+  }
+  assert(!fails.length, fails.slice(0, 3).join(' | '));
+  return `${products.length} cross-EAN OK`;
 });
 
 T('M05e', 'SGR: catalog doar junk PET/sticla → null (NEEDS_HUMAN)', () => {
@@ -317,6 +358,20 @@ T('N01', 'Nomenclator: dupa rename Carrefour NU reataseaza id (altfel redenumest
   assert(/NEVER rewrite #product_code on mismatch|nu rescrie/.test(src) || !/if \(!skuOk && sku\) \{\s*await page\.evaluate\(v => \{ const e = document\.querySelector\('#product_code'\); if \(e\) e\.value = v; \}/.test(src), 'verifyPickedProduct must not rewrite SKU');
   assert(typeof fi.applyNomenclatorSafetyGate === 'function');
   return 'nomenclator detach + pre-save gate + gestiune ensure OK';
+});
+
+T('V07', 'vatTextsMatch: resolveVatOption object vs option text (bug softNorm([object Object]))', () => {
+  assert(typeof fi.vatTextsMatch === 'function');
+  const want = fi.resolveVatOption(['21 %', '0 % - SGR', '0 % - SDD'], 21);
+  assert(want && want.text === '21 %', JSON.stringify(want));
+  assert(fi.vatTextsMatch('21 %', want) === true);
+  assert(fi.vatTextsMatch('21 %', want.text) === true);
+  assert(fi.vatTextsMatch('0 % - SGR', want) === false);
+  const sgr = fi.resolveVatOption(['21 %', '0 % - SGR', '0 % - SDD'], 0);
+  assert(fi.vatTextsMatch('0 % - SGR', sgr) === true);
+  // softNorm on the object itself must NEVER be used as equality — helper takes .text
+  assert(String(want) === '[object Object]');
+  return 'vatTextsMatch OK';
 });
 
 T('V06', 'verifyPickedProduct: nameOk-only pe junk sticla → NOT ok (fara rescriere SKU)', async () => {

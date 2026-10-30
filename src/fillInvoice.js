@@ -449,11 +449,21 @@ function isSgrDepositLine(l) {
   return /GARANTIE|SGR|\bPET\b|\bSTICLA\b|\bSTICL[AĂ]\b/i.test(String(l.name || '') + ' ' + String(l.carrefourCode || '') + ' ' + String(l.ean || ''));
 }
 
+/** True when selected VAT option text matches the resolved SmartBill label (ignore spaces/% formatting). */
+function vatTextsMatch(selected, want) {
+  const a = softNorm(selected);
+  const b = softNorm(typeof want === 'object' && want ? want.text : want);
+  if (!b) return true;
+  if (!a) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a) || a.includes(b) || b.includes(a);
+}
+
 /** Uncheck "Descarca gestiune" so free-text/SGR lines without stock can save as draft. */
 async function disableStockDischarge(page, log) {
   const info = await page.evaluate(() => {
+    // Only descarc* checkboxes — NEVER bare [name*=gestiune] (unrelated warehouse toggles).
     const candidates = [
-      ...document.querySelectorAll('input[type=checkbox][name*="descarca" i], input[type=checkbox][id*="descarca" i], input[type=checkbox][name*="gestiune" i], input[type=checkbox][id*="gestiune" i]'),
+      ...document.querySelectorAll('input[type=checkbox][name*="descarca" i], input[type=checkbox][id*="descarca" i]'),
     ];
     // also match by nearby label text
     for (const inp of document.querySelectorAll('input[type=checkbox]')) {
@@ -970,9 +980,18 @@ async function run(profile, opts = {}) {
         ), { code: 'NEEDS_HUMAN' });
       }
     }
-    // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
-    // SGR is never free-text — only real drink SKUs may free-text-fallback when unmatched (rare)
-    if ((!m || m.ambiguous) && !isSgrDepositLine(l) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
+    // Unmatched drink / kombucha lines must NEVER free-text (that created PET/EVA junk and wrong ciorne).
+    // Optional free-text only for non-drink unknowns when auto.allowFreeTextDraft is set.
+    if ((!m || m.ambiguous) && !isSgrDepositLine(l)) {
+      const drinkLike = /KOMBUCHA|IKOMBUCHA|SOKATA|ZMEUR|MENTOLIME|GHIMBIR|PASSION|PASIUN|ROOIB|TRANDAFIR|\bMENTA\b|\bSOC\b/i.test(String(l.name || ''));
+      if (drinkLike || !cfg.auto?.allowFreeTextDraft) {
+        throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m && m.ambiguous ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista / nu se potriveste unic in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu SKU-ul Shopify corect, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
+      }
+      if (cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) {
+        plan.lines.push({ ...l, smartbill: null, freeText: true });
+        continue;
+      }
+    }
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
     plan.lines.push({ ...l, smartbill: m, _sgrService: isSgrDepositLine(l) });
   }
@@ -1180,15 +1199,17 @@ async function run(profile, opts = {}) {
           throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
         }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
-        // BT-153 rename can reset VAT (SGR services often default to SDD) — re-select and assert
+        // BT-153 rename can reset VAT (SGR services often default to SDD) — re-select and assert.
+        // Compare option TEXT only (resolveVatOption returns {kind,text}; selectVatCode returns a log label).
         const vatWant = resolveVatOption(await page.$$eval('#vat_code option', opts => opts.map(o => (o.text || '').trim()).filter(Boolean)), l.vat);
         const vatNow = result.afterName.vat;
-        if (vatWant && softNorm(vatNow) !== softNorm(vatWant)) {
-          const reselected = await selectVatCode(page, l.vat);
-          result.afterName.vat = reselected;
+        if (vatWant && vatWant.text && !vatTextsMatch(vatNow, vatWant.text)) {
+          await selectVatCode(page, l.vat);
+          const afterVat = await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
+          result.afterName.vat = afterVat;
           result.afterName.vatReselected = true;
-          if (softNorm(reselected) !== softNorm(vatWant)) {
-            throw new Error(`TVA s-a schimbat dupa numele liniei: este "${reselected}", trebuia "${vatWant}"`);
+          if (!vatTextsMatch(afterVat, vatWant.text)) {
+            throw new Error(`TVA s-a schimbat dupa numele liniei: este "${afterVat}", trebuia "${vatWant.text}"`);
           }
         }
         const qtyNow = ((await page.inputValue('#quantity').catch(() => '')) || '').trim();
@@ -1548,4 +1569,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct, vatTextsMatch };

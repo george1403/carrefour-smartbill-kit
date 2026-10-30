@@ -73,23 +73,27 @@ function isJunkMirror(p, line) {
 
 /**
  * Carrefour Furori SKUs (*F / mentolime / zmeura / fr pas) vs ikombucha (*IK).
- * GHIMBIRUTA must never fuzzy-pick ghimbirIK*; SOKATA never socIK.
+ * Bidirectional: GHIMBIRUTA≠ghimbirIK AND IKOMBUCHA GHIMBIR≠ghimbirutaF; never EVA for Furori portal names.
+ * Family is decided by SKU code first (polluted Denumire like "Furori…"+ghimbirIK must not count as Furori).
  */
 function brandFamilyAgree(line, p) {
   const L = norm(line && line.name);
   const code = String(p.Cod ?? p.code ?? '').trim();
   const name = String(p.Denumire || p.name || '');
-  const P = norm(`${name} ${code}`);
   if (!L) return true;
-  const isIk = /IK\d|ikombucha|^[a-z]+IK\b/i.test(code) || /^ikombucha/i.test(name);
-  const isFurori = /Furori|sokataF|zmeura\d|fr\s*pas|ghimbirutaF|mentolime/i.test(code + ' ' + name)
-    || /F\d{3,4}$/i.test(code);
-  // Portal Carrefour drink names that belong to Furori stock, not IK classics
-  if (/GHIMBIRUTA|SOKATA|ZMEURIKA|MENTOLIME|PASSION|PASIUN/.test(L)) {
-    if (isIk && !isFurori) return false;
-  }
-  // Classic IK portal names should not pick Furori *F
-  if (/\bSOC\b/.test(L) && !/SOKATA/.test(L) && isFurori && /sokataF/i.test(code)) return false;
+  const isIk = /IK\d|[a-z]+IK\b|IK\s*vrac|ikombucha/i.test(code) || (/^ikombucha/i.test(name) && !/F\d{3,4}$|ghimbirutaF|sokataF|mentolime|zmeura\d|fr\s*pas/i.test(code));
+  const isFurori = /sokataF|zmeura\d|fr\s*pas|ghimbirutaF|mentolime/i.test(code) || /F\d{3,4}$/i.test(code)
+    || (/Furori/i.test(name) && !isIk);
+  const looksFuroriPortal = /GHIMBIRUTA|SOKATA|ZMEURIKA|MENTOLIME|PASSION|PASIUN|\bFURORI\b/.test(L);
+  // Classic IK naming — exclude Furori Shopify stock names ("Furori kombucha ghimbir …")
+  const looksIkPortal = /IKOMBUCHA/.test(L)
+    || (/\bSOC\b/.test(L) && !/SOKATA|FURORI/.test(L))
+    || (/\bGHIMBIR\b/.test(L) && !/GHIMBIRUTA|FURORI/.test(L))
+    || (/\bMENTA\b/.test(L) && !/MENTOLIME|LAMAI|FURORI/.test(L));
+  if (looksFuroriPortal && isIk && !isFurori) return false;
+  if (looksIkPortal && isFurori && !isIk) return false;
+  // EVA is a separate catalog — never stock-match Carrefour Furori/IK drink lines
+  if ((looksFuroriPortal || looksIkPortal || /KOMBUCHA|IKOMBUCHA/.test(L)) && /^EVA\b/i.test(code)) return false;
   return true;
 }
 
@@ -103,10 +107,12 @@ function brandRank(p) {
   const name = String(p.Denumire || p.name || '');
   if (/^CF-/i.test(code) || gtin(code)) return -100;
   if (/^SGR\b/i.test(code)) return 60;
-  if (/Furori|sokataF|zmeura\d|fr pas|ghimbirutaF|mentolime|coacaze|tonika/i.test(code + ' ' + name)) return 50;
-  if (/IK\d|ikombucha|^[a-z]+IK|^(socIK|ghimbirIK|rooib|menta|trand|CV)/i.test(code) || /^ikombucha/i.test(name)) return 45;
-  if (/^EVA\b/i.test(code)) return -20; // not their Carrefour stock line
+  // Other brands first — "RAYAM zmeura330" must not match the zmeura\\d Furori SKU pattern
+  if (/^EVA\b/i.test(code)) return -20;
   if (/^RAYAM\b/i.test(code)) return 5;
+  if (/Furori/i.test(name) || /^(sokataF|zmeura\d|fr\s*pas|ghimbirutaF|mentolime|coacaze|tonika)/i.test(code)
+    || /\b(sokataF|zmeura\d|ghimbirutaF|mentolime)\b/i.test(code)) return 50;
+  if (/IK\d|ikombucha|^[a-z]+IK|^(socIK|ghimbirIK|rooib|menta|trand|CV)/i.test(code) || /^ikombucha/i.test(name)) return 45;
   return 0;
 }
 
@@ -127,29 +133,55 @@ function findBySkuOrId(products, pin) {
   return hits.sort((a, b) => brandRank(b) - brandRank(a))[0];
 }
 
+/** Exclusive flavor family — used both directions so wrong EANs cannot stocPin across flavors. */
+function flavorKey(s) {
+  const N = norm(s);
+  if (!N) return null;
+  if (/GARANTIE|SGR/.test(N) && /PET|PLASTIC/.test(N)) return 'SGR_PET';
+  if (/GARANTIE|SGR/.test(N) && /STICL/.test(N)) return 'SGR_STICLA';
+  if (/MENTOLIME|MENTA.*LAMAI|LAMAI.*MENTA/.test(N)) return 'MENTOLIME';
+  if (/GHIMBIRUTA|GHIMBIRUTAF/.test(N)) return 'GHIMBIRUTA';
+  if (/\bGHIMBIR\b/.test(N)) return 'GHIMBIR_IK';
+  if (/SOKATA|SOKATAF/.test(N)) return 'SOKATA';
+  if (/\bSOC\b/.test(N)) return 'SOC_IK';
+  if (/ZMEUR/.test(N)) return 'ZMEURA';
+  if (/PASSION|PASIUN|FR\s*PAS|FRPAS/.test(N)) return 'PASSION';
+  if (/ROOIB/.test(N)) return 'ROOIB';
+  if (/TRANDAFIR|HIBISCUS|\bTRAND/.test(N)) return 'TRAND';
+  if (/\bMENTA\b/.test(N)) return 'MENTA_IK';
+  if (/CEAI\s*VERDE|\bCV\d/.test(N)) return 'CV';
+  if (/COACAZE/.test(N)) return 'COACAZE';
+  if (/TONIKA/.test(N)) return 'TONIKA';
+  return null;
+}
+
 /**
  * Refuse an EAN pin when the Carrefour line name is clearly a different flavor/SKU family.
  * Protects against wrong EANs in portal XML (e.g. Mentolime name + Ghimbiruta EAN → ghimbirutaF500).
+ * Bidirectional: SOC line + trandafir EAN also rejected.
  */
 function pinAgreesWithLine(line, pin) {
   const L = norm(line && line.name);
   const P = norm(`${(pin && pin.name) || ''} ${(pin && pin.sku) || ''}`);
   if (!L || !P) return true;
-  const checks = [
-    [/MENTOLIME/, /MENTOLIME|MENTA.*LAMAI|LAMAI.*MENTA/],
-    [/GHIMBIRUTA|\bGHIMBIR\b/, /GHIMBIR/],
-    [/SOKATA/, /SOKATA/], // do not accept plain "soc" / socIK via SOKATA↔SOC alias
-    [/ZMEURIKA|\bZMEURA\b/, /ZMEURA/],
-    [/PASSION|PASIUN/, /PASIUN|PASSION|\bFR\s*PAS\b|FRPAS/],
-    [/ROOIBOS|\bROOIB\b/, /ROOIB/],
-    [/TRANDAFIR|HIBISCUS/, /TRANDAFIR|HIBISCUS|TRAND/],
-    [/\bCEAI\s*VERDE\b|\bCV\d/, /CEAI\s*VERDE|\bCV\d/],
-    [/GARANTIE.*\bPET\b|\bPET\b.*GARANTIE|GARANTIE PET/, /PLASTIC|\bPET\b/],
-    [/GARANTIE.*STICL|STICL.*GARANTIE|GARANTIE STICLA/, /STICLA/],
-  ];
-  for (const [lineRe, pinRe] of checks) {
-    if (lineRe.test(L) && !pinRe.test(P)) return false;
-  }
+  const fL = flavorKey(L);
+  const fP = flavorKey(P);
+  // Compatible pairs: Carrefour GHIMBIRUTA ↔ Furori stock name that still keys as GHIMBIR_IK via "ghimbir"
+  const compatible = (a, b) => {
+    if (!a || !b) return true;
+    if (a === b) return true;
+    if ((a === 'GHIMBIRUTA' && b === 'GHIMBIR_IK') || (a === 'GHIMBIR_IK' && b === 'GHIMBIRUTA')) {
+      // Only when the Furori side is actually ghimbirutaF / Furori ghimbir stock — not classic IKOMBUCHA
+      const furoriSide = a === 'GHIMBIRUTA' ? L : P;
+      const ikSide = a === 'GHIMBIR_IK' ? L : P;
+      if (/FURORI|GHIMBIRUTA/.test(furoriSide) && /IKOMBUCHA/.test(ikSide)) return false;
+      if (/GHIMBIRUTA|GHIMBIRUTAF|FURORI/.test(P) && /GHIMBIRUTA/.test(L)) return true;
+      if (/GHIMBIRUTA|GHIMBIRUTAF|FURORI/.test(L) && /GHIMBIRUTA|GHIMBIR/.test(P) && !/IKOMBUCHA/.test(L)) return true;
+      return false;
+    }
+    return false;
+  };
+  if (fL && fP && !compatible(fL, fP)) return false;
   // Size mismatch (500 vs 330) when both sides declare a bottle size
   const szL = sizeToken(L); const szP = sizeToken(P) || (String(pin.sku || '').match(/(\d{3,4})$/) || [])[1];
   if (szL && szP) {
@@ -228,7 +260,7 @@ function matchLine(line, products, pinned = {}) {
   const pin = pinTable[eanKey] || pinTable[String(line.ean || '').trim()];
   if (pin && pinAgreesWithLine(line, pin)) {
     const p = findBySkuOrId(products, pin);
-    if (p) {
+    if (p && brandFamilyAgree(line, p)) {
       // Pin SKU from issued stock invoices is source of truth (never trust a drifted Shopify Cod).
       return {
         id: String(p.id),
@@ -237,8 +269,8 @@ function matchLine(line, products, pinned = {}) {
         how: 'stocPin',
       };
     }
-    // Pin known but product list stale — still return pin so pick types the real stock SKU.
-    if (pin.id && pin.sku) {
+    // Pin known but product list stale — still return pin only if brand family agrees with the pin SKU itself.
+    if (pin.id && pin.sku && brandFamilyAgree(line, { Cod: pin.sku, Denumire: pin.name || '' })) {
       return { id: String(pin.id), name: pin.name || null, code: pin.sku, how: 'stocPin-only' };
     }
   }
@@ -265,10 +297,19 @@ function matchLine(line, products, pinned = {}) {
       const r = same[0];
       return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') + '+tieBrand' };
     }
+    // Prefer exact flavorKey match on Cod/Denumire when scores+brand tie
+    const want = flavorKey(line.name);
+    if (want) {
+      const flav = same.filter(r => flavorKey(`${r.p.Denumire} ${r.p.Cod}`) === want);
+      if (flav.length === 1) {
+        const r = flav[0];
+        return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') + '+tieFlavor' };
+      }
+    }
     return { ambiguous: same.slice(0, 4).map(r => `${r.p.id} ${r.p.Denumire} (${r.p.Cod})`) };
   }
   const r = ranked[0];
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
-module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, pinAgreesWithLine };
+module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, pinAgreesWithLine, flavorKey };
