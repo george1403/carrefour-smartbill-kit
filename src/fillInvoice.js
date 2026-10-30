@@ -477,19 +477,22 @@ async function run(profile, opts = {}) {
         await dismissBlockingDialogs(page, log);
       } else {
         const id = l.smartbill.id;
-        const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' ');
-        const pickTimeout = sgrLine ? 25000 : 120000; // fail fast on SGR so free-text can take over
+        // Prefer Shopify denumire for autocomplete; Carrefour name is applied later via carrefourLineName
+        const pickText = (l.smartbill.name || l.name).split(' ').slice(0, 5).join(' ');
+        const pickTimeout = 25000; // fail fast -> free-text (Carrefour line) rather than hang 120s
         try {
           await typeAndPick(page, '#product_name', pickText, { has: page.locator(`xpath=self::li[@id="${id}"]`) }, { timeout: pickTimeout });
         } catch (pickErr) {
-          if (!sgrLine) throw pickErr;
-          log(`SGR linie ${i + 1} (${l.name}): autocomplete timeout/fail -> free-text + cota 0% SGR. (${String(pickErr.message || pickErr).split('\n')[0]})`);
+          // Matched in discovered list but autocomplete missing/slow (common): invoice as free-text Carrefour line.
+          // Does NOT create/rename nomenclator products (add_product=false later).
+          log(`Linie ${i + 1} (${l.name}): autocomplete fail pe produs SmartBill id ${id} "${pickText}" -> free-text Carrefour. (${String(pickErr.message || pickErr).split('\n')[0]})`);
           await page.keyboard.press('Escape').catch(() => {});
-          l._sgrFreeTextFallback = true;
-          l.freeText = true; // nomenclature gate: treat as free-text (add_product=false)
+          if (sgrLine) l._sgrFreeTextFallback = true;
+          l._pickFreeTextFallback = true;
+          l.freeText = true;
           await fillFreeTextProduct(page, l, i, result);
           await dismissBlockingDialogs(page, log);
-          (result.sgrFreeTextFallback = result.sgrFreeTextFallback || []).push({ line: i + 1, name: l.name, reason: String(pickErr.message || pickErr).split('\n')[0] });
+          (result.pickFreeTextFallback = result.pickFreeTextFallback || []).push({ line: i + 1, name: l.name, smartbillId: id, pickText, reason: String(pickErr.message || pickErr).split('\n')[0] });
         }
         await dismissBlockingDialogs(page, log);
       }
@@ -531,7 +534,9 @@ async function run(profile, opts = {}) {
             await setField(page, '#measuring_unit', cfg.smartbill.carrefourUnit, { blurTo: '#quantity' });
           }
         }
-        if (l.carrefourCode && !(await bt156.inputValue().catch(() => ''))) await bt156.fill(String(l.carrefourCode));
+        // Carrefour e-Factura ids on the LINE (not the Shopify SKU): BT-156 buyer code, BT-157 EAN
+        if (l.carrefourCode) await bt156.fill(String(l.carrefourCode));
+        if (l.ean) await page.fill('#id-product-additional-field-standardItemIdentifier', String(l.ean));
         if (String(await page.inputValue('#price')) !== String(l.price) && Number(await page.inputValue('#price')) !== Number(l.price)) {
           await page.fill('#price', String(l.price));
         }

@@ -81,6 +81,10 @@ function score(line, p) {
   if (Number(line.vat) === 0 && /SGR/i.test(vatRaw)) { s += 10; why.push('cotaSGR'); }
 
   if (BUNDLE.test(name)) s -= 60;
+  // Prefer Shopify SKU codes (sokataF500, PET) over Cod that is only the GTIN/EAN mirror
+  const codeDig = digits(code);
+  if (code && !gtin(code) && !/^\d{8,14}$/.test(codeDig)) { s += 8; why.push('sku'); }
+  else if (gtin(code) || (codeDig.length >= 8 && codeDig.length <= 14)) { s -= 5; why.push('codEanMirror'); }
   return { s, why };
 }
 
@@ -93,6 +97,16 @@ function matchLine(line, products, pinned = {}) {
   }
   const ranked = products.map(p => ({ p, ...score(line, p) })).filter(r => r.s >= 40).sort((a, b) => b.s - a.s);
   if (!ranked.length) return null;
+  // If top is an EAN-as-Cod mirror and next is a Shopify SKU with solid name score, prefer SKU
+  if (ranked[1]) {
+    const topCode = String(ranked[0].p.Cod || ranked[0].p.code || '');
+    const nextCode = String(ranked[1].p.Cod || ranked[1].p.code || '');
+    const topIsEanCod = !!(gtin(topCode) || (digits(topCode).length >= 8 && digits(line.ean || '') === digits(topCode)));
+    const nextIsSku = nextCode && !gtin(nextCode) && !/^\d{8,14}$/.test(digits(nextCode));
+    if (topIsEanCod && nextIsSku && ranked[1].s >= 40 && ranked[0].s - ranked[1].s <= 50) {
+      ranked.unshift(ranked.splice(1, 1)[0]);
+    }
+  }
   if (ranked[1] && ranked[1].s === ranked[0].s) return { ambiguous: ranked.slice(0, 4).map(r => `${r.p.id} ${r.p.Denumire} (${r.p.Cod})`) };
   const r = ranked[0];
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
