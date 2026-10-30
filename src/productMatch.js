@@ -1,7 +1,7 @@
 'use strict';
 /**
  * Match a Carrefour order line to an EXISTING SmartBill stock product (Shopify SKUs).
- * Pin map comes from real issued KCRF invoices (EAN → Furori/ikombucha/SGR SKU).
+ * Pin map comes from real issued Carrefour stock invoices (EAN → Furori/ikombucha/SGR SKU).
  * Never prefer CF-* / EAN-mirror junk. Never invent products.
  */
 const fs = require('fs');
@@ -29,7 +29,7 @@ const ALIAS = {
   STICLA: ['STICLA', 'STICLA'],
 };
 
-/** EAN → { sku, name, id } from issued KCRF invoices (stock products they already use). */
+/** EAN → { sku, name, id } from issued Carrefour stock invoices (products they already use). */
 let EAN_PIN = null;
 function loadEanPin() {
   if (EAN_PIN) return EAN_PIN;
@@ -153,24 +153,24 @@ function matchLine(line, products, pinned = {}) {
     return { id, name: p && (p.Denumire || p.name), code: p && (p.Cod || p.code), how: 'profil' };
   }
 
-  // 2) Hard pin from issued KCRF invoices = their real SmartBill stock products
+  // 2) Hard pin from issued stock invoices = their real SmartBill products
   const eanKey = String(line.ean || '').replace(/\D/g, '').replace(/^0+/, '') || String(line.ean || '').trim();
   const pinTable = loadEanPin();
   const pin = pinTable[eanKey] || pinTable[String(line.ean || '').trim()];
   if (pin) {
     const p = findBySkuOrId(products, pin);
     if (p) {
-      // Pin SKU from issued KCRF is source of truth (never trust a drifted Shopify Cod like sokataP*).
+      // Pin SKU from issued stock invoices is source of truth (never trust a drifted Shopify Cod).
       return {
         id: String(p.id),
         name: pin.name || p.Denumire || p.name,
         code: pin.sku || p.Cod || p.code,
-        how: 'stocKCRF',
+        how: 'stocPin',
       };
     }
     // Pin known but product list stale — still return pin so pick types the real stock SKU.
     if (pin.id && pin.sku) {
-      return { id: String(pin.id), name: pin.name || null, code: pin.sku, how: 'stocKCRF-pinOnly' };
+      return { id: String(pin.id), name: pin.name || null, code: pin.sku, how: 'stocPin-only' };
     }
   }
 
