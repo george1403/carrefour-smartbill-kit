@@ -253,6 +253,16 @@ T('F02', 'pickExistingProduct nu arde 20s pe numele lung inainte de force-select
   return 'force before long-name last resort';
 });
 
+T('N01', 'Nomenclator: dupa rename Carrefour NU reataseaza id (altfel redenumeste produsul in SmartBill)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src/fillInvoice.js'), 'utf8');
+  assert(/keepId:.*!renamed|keepId: !!\(.*!renamed/.test(src.replace(/\s+/g, ' ')), 'keepId must exclude renamed lines');
+  assert(/detachId: lineIsCarrefourRename/.test(src), 'per-line detach after add missing');
+  assert(!/Prefer "no gestiune"/.test(src), 'gestiune still cleared in reset');
+  assert(/Do NOT touch #product_gestiune/.test(src), 'gestiune preserve comment missing');
+  assert(/ar redenumi nomenclatorul/.test(src), 'gate for renamed+id missing');
+  return 'nomenclator detach + gestiune preserve OK';
+});
+
 T('S01', 'forbiddenValues + KCRF absent din src shipped', () => {
   const { forbiddenValues } = require('../src/selftest');
   const v = forbiddenValues();

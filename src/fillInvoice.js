@@ -330,7 +330,8 @@ async function forceSelectKnownProduct(page, { id, sku, name, isService = false 
   return result;
 }
 
-/** Clear product line inputs between attempts / lines so leftover Mentolime search state dies. */
+/** Clear product line inputs between attempts / lines so leftover Mentolime search state dies.
+ *  Do NOT touch #product_gestiune — clearing it left invoice lines without warehouse. */
 async function resetProductLineInputs(page) {
   await closeAllAutocompletes(page);
   await page.evaluate(() => {
@@ -341,16 +342,6 @@ async function resetProductLineInputs(page) {
       e.dispatchEvent(new Event('input', { bubbles: true }));
       e.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    // Stock-mode search filters to gestiune qty>0 and returns items=0 for valid SKUs (Mentolime).
-    // Prefer "no gestiune" / empty so get_products_cache search runs.
-    try {
-      const g = document.querySelector('#product_gestiune');
-      if (g && g.value && g.value !== '0') {
-        g.value = '0';
-        g.dispatchEvent(new Event('change', { bubbles: true }));
-        if (window.$) try { window.$(g).val('0').trigger('change'); } catch {}
-      }
-    } catch {}
   }).catch(() => {});
   await page.waitForTimeout(T(200));
 }
@@ -776,9 +767,9 @@ async function dismissBlockingDialogs(page, log = () => {}) {
       const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
       if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); log('Dialog precompletare produs: Nu'); continue; }
     }
-    if (/Introducere in nomenclator/i.test(text)) {
+    if (/Introducere in nomenclator|Actualiz.*nomenclator|salvezi produsul|modific.*produs.*nomenclator/i.test(text)) {
       const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
-      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); continue; }
+      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); log('Dialog nomenclator: Nu'); continue; }
     }
     const ok = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*(OK|Am inteles|Inchide|Nu)\s*$/i }).first();
     if (await ok.count() && await ok.isVisible().catch(() => false)) { await ok.click().catch(() => {}); await page.waitForTimeout(T(700)); continue; }
@@ -1153,27 +1144,57 @@ async function run(profile, opts = {}) {
         rows: await page.evaluate(() => (window.products || []).length) });
       { const err = page.locator('.swal2-popup:visible, .modal:visible, .ui-dialog:visible').filter({ hasText: /Au aparut erori/i });
         if (await err.count()) { const t = (await err.first().innerText()).replace(/\s+/g, ' ').trim(); throw new Error(`SmartBill nu a adaugat linia ${i + 1} (${l.name}): ${t}`); } }
-      // "Doresti sa salvezi produsul in Nomenclator?" -> always "Nu": the invoice line must never create/rename a product
-      const ask = page.locator('.ui-dialog:visible').filter({ hasText: /Introducere in nomenclator/i });
-      if (await ask.count()) { await ask.locator('button', { hasText: /^\s*Nu\s*$/ }).first().click(); await page.waitForTimeout(1200); (result.nomenclatorDialog = result.nomenclatorDialog || []).push({ line: i + 1, answered: 'Nu' }); }
+      // "Doresti sa salvezi / actualizezi produsul in Nomenclator?" -> always "Nu"
+      const ask = page.locator('.ui-dialog:visible, .modal:visible, .swal2-popup:visible').filter({ hasText: /Introducere in nomenclator|Actualiz.*nomenclator|salvezi produsul|modific.*nomenclator/i });
+      if (await ask.count()) {
+        const nu = ask.locator('button, a.btn, .swal2-confirm, .swal2-cancel').filter({ hasText: /^\s*Nu\s*$/i });
+        if (await nu.count()) await nu.first().click();
+        else await ask.locator('button', { hasText: /Nu/i }).first().click().catch(() => {});
+        await page.waitForTimeout(1200);
+        (result.nomenclatorDialog = result.nomenclatorDialog || []).push({ line: i + 1, answered: 'Nu' });
+      }
+      // Immediately after add: never let SmartBill sync Carrefour line name back into the stock product.
+      // Changing #product_name while id is set marks add_product=true → renames nomenclator on save.
+      {
+        const shopifySku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim();
+        const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
+        const lineIsCarrefourRename = !!(cfg.smartbill?.carrefourLineName && l.name
+          && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
+        await page.evaluate(({ sku, detachId }) => {
+          const rows = window.products || [];
+          const p = rows[rows.length - 1];
+          if (!p || p.is_discount) return;
+          p.add_product = false;
+          if (sku) p.product_code = sku;
+          // Detach stock id when invoice line name ≠ nomenclator name (BT-153 Carrefour text on LINE only).
+          if (detachId) p.id = null;
+        }, { sku: shopifySku || null, detachId: lineIsCarrefourRename || !!l.freeText });
+      }
     }
-    // Never create/rename nomenclator products (add_product=false always).
-    // Re-attach Shopify product id + SKU after Carrefour line rename (SmartBill clears id when name changes).
-    // Free-text lines (no match) stay id=null with empty/non-CF code.
-    const keepPayload = plan.lines.map(l => ({
-      keep: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText),
-      id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
-      sku: String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null,
-    }));
+    // Final nomenclature gate before Spre salvare:
+    // - add_product MUST stay false (never create/rename stock products)
+    // - if line name is Carrefour text, id MUST be null (keeping id + different name renames the product in SmartBill)
+    // - product_code stays Shopify SKU for traceability
+    const keepPayload = plan.lines.map(l => {
+      const sku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null;
+      const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
+      const renamed = !!(cfg.smartbill?.carrefourLineName && l.name && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
+      return {
+        sku,
+        // Only keep stock id when we did NOT overwrite the line name with Carrefour text
+        keepId: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText && !renamed),
+        id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
+        renamed,
+      };
+    });
     result.lineNomenclator = await page.evaluate((payload) => (window.products || []).map((p, i) => {
-      const was = { id: p.id, add_product: p.add_product, code: p.product_code };
+      const was = { id: p.id, add_product: p.add_product, code: p.product_code, name: p.product_name };
       if (!p.is_discount) {
         p.add_product = false;
         const row = payload[i] || {};
-        if (row.keep && row.id) {
-          p.id = row.id;
-          if (row.sku) p.product_code = row.sku;
-        } else {
+        if (row.sku) p.product_code = row.sku;
+        if (row.keepId && row.id) p.id = row.id;
+        else {
           p.id = null;
           if (/^CF-/i.test(String(p.product_code || ''))) p.product_code = '';
         }
@@ -1182,11 +1203,14 @@ async function run(profile, opts = {}) {
     }), keepPayload);
     if (cfg.smartbill?.carrefourLineName) { const names = await page.evaluate(() => (window.products || []).map(p => p.product_name));
       plan.lines.forEach((l, i) => { if (names[i] !== l.name) throw new Error(`STOP: linia ${i + 1} are numele "${names[i]}" in loc de "${l.name}"`); }); }
-    // nomenclature gate: add_product must stay false; matched lines should keep Shopify id when possible
     result.lineState = await page.evaluate(() => (window.products || []).map(p => ({ name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description })));
     for (const [i, st] of result.lineState.entries()) {
       if (st.add_product) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
       if (/^CF-/i.test(String(st.code || ''))) throw new Error(`STOP: linia ${i + 1} are cod CF-* (${st.code}) — ar crea produs nou. Foloseste SKU Shopify.`);
+      // Carrefour rename on the line + stock id still attached = nomenclator would be renamed on save
+      if (keepPayload[i] && keepPayload[i].renamed && st.id) {
+        throw new Error(`STOP: linia ${i + 1} are nume Carrefour dar inca e legata de produsul stock id=${st.id} — ar redenumi nomenclatorul.`);
+      }
     }
     result.seriesAtEnd = await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
     if (!new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(result.seriesAtEnd || '')) throw new Error(`Seria s-a schimbat in ${result.seriesAtEnd}`);
