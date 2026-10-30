@@ -30,6 +30,22 @@ async function run() {
     (Object.values(fi.checkDraftXml(x, o)).every(Boolean) && !Object.values(fi.checkDraftXml(x.replace('A &amp; B 50G', 'Alt nume'), o)).every(Boolean) ? ok : no)('verificare XML: nume linie = descriere Carrefour, U.M. XPP');
     const ec = require('./errors').classify; (ec({ code: 'CAPTCHA', message: 'x' }).exit === 3 && ec(new Error('page.goto: net::ERR_INTERNET_DISCONNECTED')).exit === 5 ? ok : no)('coduri de iesire (3 = autentificare Carrefour, 5 = fara internet)');
   } catch (e) { no('verificari rapide: ' + e.message); }
+  // Pin map: flavor conflict must not force wrong stock (Mentolime name + Ghimbiruta EAN).
+  try {
+    const pm = require('./productMatch');
+    const pin = pm.loadEanPin();
+    const gEan = Object.keys(pin).find(k => pin[k].sku === 'ghimbirutaF500');
+    const mEan = Object.keys(pin).find(k => pin[k].sku === 'mentolime500');
+    const fakeProducts = [
+      { id: pin[gEan].id, Cod: pin[gEan].sku, Denumire: pin[gEan].name, 'Cota TVA': '21' },
+      { id: pin[mEan].id, Cod: pin[mEan].sku, Denumire: pin[mEan].name, 'Cota TVA': '21' },
+    ];
+    const conflict = pm.matchLine({ name: 'KOMBUCHA MENTOLIME 500ML', ean: gEan, vat: 21 }, fakeProducts, {});
+    const happy = pm.matchLine({ name: 'KOMBUCHA MENTOLIME 500ML', ean: mEan, vat: 21 }, fakeProducts, {});
+    const sokSoc = pm.pinAgreesWithLine({ name: 'KOMBUCHA SOKATA 500ML' }, { sku: 'socIK500', name: 'ikombucha soc 500 ml' });
+    ((conflict && conflict.code === 'mentolime500') && (happy && happy.code === 'mentolime500' && happy.how === 'stocPin') && sokSoc === false ? ok : no)(
+      `pin vs nume: conflict→${conflict && conflict.code} happy→${happy && happy.how} sokata≠soc`);
+  } catch (e) { no('pin vs nume: ' + e.message); }
   try { const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-automat.js')], { encoding: 'utf8', timeout: 120000 }); const last = (r.stdout || '').trim().split('\n').pop();
     (r.status === 0 ? ok : no)(`mod automat (teste offline, SmartBill simulat, nimic emis): ${last}${r.status === 0 ? '' : ' ' + (r.stdout || '').split('\n').filter(l => /^FAIL/.test(l)).join(' | ').slice(0, 800)}`); } catch (e) { no('mod automat: ' + e.message); }
   try { ok(require('../scripts/test-fresh-setup').run()); } catch (e) { no('setup din ZIP proaspat: ' + e.message.slice(0, 1500)); }

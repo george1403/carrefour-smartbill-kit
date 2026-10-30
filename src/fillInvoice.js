@@ -389,20 +389,31 @@ async function pickExistingProduct(page, l, log) {
   const id = String(l.smartbill.id);
   const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
   const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
-  // Unique search strings — SKU first (mentolime500), then distinctive flavor+size, avoid generic "Furori kombucha menta"
+  // Unique search strings — #product_code first (narrower autocomplete than name; avoids client/GTIN chrome),
+  // then #product_name with SKU, then distinctive flavor+size. Never generic "Furori kombucha menta".
   const attempts = [];
   if (sku) {
-    attempts.push({ field: '#product_name', text: sku });
     attempts.push({ field: '#product_code', text: sku });
+    attempts.push({ field: '#product_name', text: sku });
+    // Spaced SKUs ("SGR sticla", "fr pas500"): also try compact form in code field
+    if (/\s/.test(sku)) {
+      const compact = sku.replace(/\s+/g, '');
+      if (compact !== sku) attempts.push({ field: '#product_code', text: compact });
+      attempts.push({ field: '#product_name', text: sku.replace(/\s+/g, ' ').trim() });
+    }
     // SGR services: "SGR sticla" / "SGR plastic" — also try short token SmartBill indexes well
     if (/^sgr\b/i.test(sku)) {
       const short = sku.replace(/^sgr\s+/i, '').trim(); // sticla / plastic
-      if (short) attempts.push({ field: '#product_name', text: `SGR ${short}` });
+      if (short) {
+        attempts.push({ field: '#product_code', text: `SGR ${short}` });
+        attempts.push({ field: '#product_name', text: `SGR ${short}` });
+      }
       attempts.push({ field: '#product_name', text: 'SGR' });
     }
     // Furori codes: sokataF500 — also try without the F and with space before size
     const m = sku.match(/^([a-z]+)F?(\d{3,4})$/i);
     if (m) {
+      attempts.push({ field: '#product_code', text: `${m[1]}${m[2]}` });
       attempts.push({ field: '#product_name', text: `${m[1]}${m[2]}` });
       attempts.push({ field: '#product_name', text: `${m[1]} ${m[2]}` });
     }

@@ -100,6 +100,38 @@ function findBySkuOrId(products, pin) {
   return hits.sort((a, b) => brandRank(b) - brandRank(a))[0];
 }
 
+/**
+ * Refuse an EAN pin when the Carrefour line name is clearly a different flavor/SKU family.
+ * Protects against wrong EANs in portal XML (e.g. Mentolime name + Ghimbiruta EAN → ghimbirutaF500).
+ */
+function pinAgreesWithLine(line, pin) {
+  const L = norm(line && line.name);
+  const P = norm(`${(pin && pin.name) || ''} ${(pin && pin.sku) || ''}`);
+  if (!L || !P) return true;
+  const checks = [
+    [/MENTOLIME/, /MENTOLIME|MENTA.*LAMAI|LAMAI.*MENTA/],
+    [/GHIMBIRUTA|\bGHIMBIR\b/, /GHIMBIR/],
+    [/SOKATA/, /SOKATA/], // do not accept plain "soc" / socIK via SOKATA↔SOC alias
+    [/ZMEURIKA|\bZMEURA\b/, /ZMEURA/],
+    [/PASSION|PASIUN/, /PASIUN|PASSION|\bFR\s*PAS\b|FRPAS/],
+    [/ROOIBOS|\bROOIB\b/, /ROOIB/],
+    [/TRANDAFIR|HIBISCUS/, /TRANDAFIR|HIBISCUS|TRAND/],
+    [/\bCEAI\s*VERDE\b|\bCV\d/, /CEAI\s*VERDE|\bCV\d/],
+    [/GARANTIE.*\bPET\b|\bPET\b.*GARANTIE|GARANTIE PET/, /PLASTIC|\bPET\b/],
+    [/GARANTIE.*STICL|STICL.*GARANTIE|GARANTIE STICLA/, /STICLA/],
+  ];
+  for (const [lineRe, pinRe] of checks) {
+    if (lineRe.test(L) && !pinRe.test(P)) return false;
+  }
+  // Size mismatch (500 vs 330) when both sides declare a bottle size
+  const szL = sizeToken(L); const szP = sizeToken(P) || (String(pin.sku || '').match(/(\d{3,4})$/) || [])[1];
+  if (szL && szP) {
+    const a = szL.replace(/\D/g, ''); const b = String(szP).replace(/\D/g, '');
+    if (a && b && a !== b) return false;
+  }
+  return true;
+}
+
 function score(line, p) {
   const name = p.Denumire || p.name || '';
   const code = String(p.Cod ?? p.code ?? '').trim();
@@ -157,7 +189,7 @@ function matchLine(line, products, pinned = {}) {
   const eanKey = String(line.ean || '').replace(/\D/g, '').replace(/^0+/, '') || String(line.ean || '').trim();
   const pinTable = loadEanPin();
   const pin = pinTable[eanKey] || pinTable[String(line.ean || '').trim()];
-  if (pin) {
+  if (pin && pinAgreesWithLine(line, pin)) {
     const p = findBySkuOrId(products, pin);
     if (p) {
       // Pin SKU from issued stock invoices is source of truth (never trust a drifted Shopify Cod).
@@ -194,4 +226,4 @@ function matchLine(line, products, pinned = {}) {
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
-module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, loadEanPin };
+module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, loadEanPin, pinAgreesWithLine };
