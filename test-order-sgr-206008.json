@@ -1,0 +1,44 @@
+{
+  "source": "test",
+  "orderNo": "TEST206008",
+  "orderDate": "2026-10-25",
+  "despatchId": "179999999999999",
+  "despatchDate": "2026-10-25",
+  "deliveryDate": "2026-10-25",
+  "store": {
+    "gln": "5940475219833",
+    "glnScheme": "9",
+    "name": "TEST CARREFOUR BUCURESTI",
+    "street": "Str. Test 123",
+    "city": "BUCURESTI",
+    "rawCity": "BUCURESTI, Sector 1",
+    "county": "Bucuresti",
+    "country": "RO"
+  },
+  "lines": [
+    {
+      "name": "SGR GARANTIE STICLA PET 0.5L",
+      "ean": "9999999990001",
+      "carrefourCode": "SGR001",
+      "sellerCode": "SGR001",
+      "qty": 10,
+      "unitCode": "PCE",
+      "price": 0.50,
+      "vat": 0,
+      "net": 5.00,
+      "packSize": 1
+    },
+    {
+      "name": "CARPATHIAN JERKY BEEF ORIGINAL 25G",
+      "ean": "5941005501014",
+      "carrefourCode": "12345678",
+      "sellerCode": "99",
+      "qty": 5,
+      "unitCode": "PCE",
+      "price": 8.99,
+      "vat": 11,
+      "net": 44.95,
+      "packSize": 25
+    }
+  ]
+}

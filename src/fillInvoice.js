@@ -43,9 +43,662 @@ async function typeAndPick(page, input, text, liFilter, { timeout = 20000 } = {}
   await el.click(); await el.fill('');
   await el.pressSequentially(text, { delay: 40 });
   const li = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter(liFilter).first();
-  await li.waitFor({ state: 'visible', timeout });
-  await li.click();
-  await page.waitForTimeout(1200);
+  try {
+    await li.waitFor({ state: 'visible', timeout: Math.min(timeout, T(8000)) });
+    await li.click();
+  } catch (e) {
+    // DOM fallback (same Mentolime/Sokata class of failure: menu in DOM, :visible lies)
+    const want = String(text || '');
+    const clicked = await page.evaluate((needle) => {
+      const soft = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const n = soft(needle);
+      const hit = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+        .find(li => soft(li.innerText || li.textContent).includes(n));
+      if (!hit) return false;
+      try {
+        hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        hit.click();
+      } catch { try { hit.click(); } catch { return false; } }
+      return true;
+    }, want).catch(() => false);
+    if (!clicked) {
+      throw new Error(`Timeout waiting for dropdown after typing "${text}" in ${input}. SmartBill slow or element not found (waited ${timeout}ms). Original: ${e.message}`);
+    }
+  }
+  await page.waitForTimeout(T(900));
+}
+
+/** Decode SmartBill HTML entities in autocomplete labels (&amp; → &, &#x27; → '). */
+function softNorm(s) {
+  return String(s || '')
+    .replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Collect product autocomplete rows for ONE input only.
+ * Prefer jQuery UI widget tied to the field; fall back to shown product menus.
+ * ALWAYS try exact stock id first (even if menu fails Playwright :visible / getClientRects).
+ */
+function productAutocompleteItemsScript() {
+  return ({ inputSel, id, sku, name }) => {
+    const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#x27;|&apos;|&#39;/gi, "'").replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const label = (li) => soft(li.innerText || li.textContent || li.getAttribute('aria-label') || '');
+    const noise = t => {
+      const x = soft(t);
+      if (!x) return true;
+      if (/^adauga client|client-add-new/.test(x)) return true;
+      if (/^carrefour romania\b/.test(x)) return true;
+      if (/^(pce|xpp|buc|kg|lei|ron)$/.test(x)) return true;
+      if (/^0160\b|gtin\s*-|global trade item/.test(x)) return true;
+      return false;
+    };
+    // Same rule as countForField — do NOT require getClientRects (Mentolime: n=1, Vazute:[])
+    const shown = (ul) => {
+      if (!ul) return false;
+      const st = getComputedStyle(ul);
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
+    };
+    // SmartBill select handler is window.productAutocompleteSelect({ item }) — plain .click() on <li>
+    // often leaves #product_name unchanged (Mentolime / Sokata "picked" but fields empty).
+    const itemFromLi = (li) => {
+      try {
+        if (window.$) {
+          const $li = window.$(li);
+          return $li.data('item.autocomplete') || $li.data('ui-autocomplete-item') || $li.data('autocompleteItem') || null;
+        }
+      } catch {}
+      return null;
+    };
+    const selectProductItem = (item, via) => {
+      if (!item || item.id == null) return { ok: false, via };
+      try {
+        if (typeof window.productAutocompleteSelect === 'function') {
+          window.productAutocompleteSelect({ item });
+          return { ok: true, id: String(item.id), text: soft(item.label || item.value || item.name || ''), n: 1, via };
+        }
+      } catch {}
+      return { ok: false, via };
+    };
+    const clickLi = (hit) => {
+      const data = itemFromLi(hit);
+      if (data) {
+        const r = selectProductItem(data, 'ac-select');
+        if (r.ok) return r;
+      }
+      // Build minimal item from DOM id + label if SmartBill data missing
+      if (hit.id && /^\d{5,}$/.test(String(hit.id))) {
+        const t = (hit.innerText || hit.textContent || '').replace(/\s+/g, ' ').trim();
+        const codeMatch = /\(([^)]+)\)\s*$/.exec(t);
+        const r = selectProductItem({
+          id: Number(hit.id) || hit.id,
+          label: t,
+          value: t.replace(/\s*\([^)]+\)\s*$/, '').trim(),
+          name: t.replace(/\s*\([^)]+\)\s*$/, '').trim(),
+          code: codeMatch ? codeMatch[1].trim() : (sku || ''),
+          nomenclator: true,
+          is_composed: false,
+          measuring_unit_name: 'buc',
+          is_vat_included: false,
+          is_service: false,
+          additionalData: {},
+        }, 'ac-select-built');
+        if (r.ok) return r;
+      }
+      try {
+        if (window.$ && window.$(hit).length) {
+          const $hit = window.$(hit);
+          try { window.$(hit).parent().menu('focus', null, $hit); } catch {}
+          $hit.trigger('mouseenter');
+          $hit.find('a, .ui-menu-item-wrapper').first().click();
+          $hit.click();
+        } else {
+          hit.scrollIntoView({ block: 'nearest' });
+          hit.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+          hit.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+          hit.click();
+        }
+      } catch { try { hit.click(); } catch {} }
+      return { ok: true, id: hit.id, text: label(hit), n: 1, via: 'dom-click' };
+    };
+
+    // 0) Exact stock id anywhere in autocomplete DOM (most reliable)
+    if (id) {
+      const byId = [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+        .find(li => String(li.id) === String(id));
+      if (byId) {
+        const r = clickLi(byId);
+        if (r && r.ok) return { ...r, n: 1 };
+      }
+    }
+
+    const input = document.querySelector(inputSel);
+    let items = [];
+    let widget = null;
+    try {
+      if (input && window.$) {
+        const ac = window.$(input).data('ui-autocomplete') || window.$(input).data('autocomplete');
+        if (ac) {
+          widget = window.$(input).autocomplete('widget')[0] || null;
+          if (widget) items = [...widget.querySelectorAll('li.ui-menu-item')];
+        }
+      }
+    } catch {}
+    if (!items.length && input) {
+      const owns = input.getAttribute('aria-owns') || input.getAttribute('aria-controls');
+      if (owns) {
+        const w = document.getElementById(owns);
+        if (w) items = [...w.querySelectorAll('li.ui-menu-item')];
+      }
+    }
+    if (!items.length) {
+      const uls = [...document.querySelectorAll('ul.ui-autocomplete')].filter(shown);
+      for (const ul of uls) {
+        const lis = [...ul.querySelectorAll('li.ui-menu-item')];
+        const texts = lis.map(label);
+        const looksProduct = lis.some(li => li.id && /^\d{5,}$/.test(String(li.id)))
+          || texts.some(t => t && !noise(t) && t.length > 8);
+        const looksClient = lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))
+          || texts.some(t => /carrefour romania|adauga client/.test(t));
+        if (looksClient && !looksProduct) continue;
+        if (lis.length && lis.every(li => noise(label(li)))) continue;
+        items = lis;
+        break;
+      }
+    }
+    // Keep candidates for diagnostics even if later filtered
+    const rawTexts = items.map(li => ({ id: li.id || '', text: label(li) }));
+    items = items.filter(li => !noise(label(li)));
+    const texts = items.map(li => ({ id: li.id || '', text: label(li) }));
+
+    let hit = id && items.find(li => String(li.id) === String(id));
+    if (!hit && sku) {
+      const sk = soft(sku);
+      hit = items.find(li => soft(li.id) === sk || label(li).includes(sk)
+        || (/\(([^)]+)\)\s*$/.test(li.innerText || li.textContent || '') && soft(RegExp.$1) === sk));
+    }
+    if (!hit && name) {
+      const nrm = soft(name).replace(/[&+/]/g, ' ');
+      const toks = nrm.split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'si', 'cu', 'de'].includes(t));
+      const sz = (nrm.match(/\b(330|500|750|1000)\b/) || [])[1];
+      hit = items.find(li => {
+        const t = label(li);
+        if (sz && !t.includes(sz)) return false;
+        const need = toks.filter(x => !/^\d+$/.test(x));
+        return need.filter(x => t.includes(x)).length >= Math.min(2, need.length);
+      });
+    }
+    // Single leftover row after a SKU/name search — accept only if id/SKU matches (never junk PET/sticla alone)
+    if (!hit && items.length === 1) {
+      const only = items[0];
+      const t = label(only);
+      const idOk = id && String(only.id) === String(id);
+      const skuOk = sku && soft(sku).length >= 3 && (t.includes(soft(sku)) || soft(only.id) === soft(sku)
+        || (/\(([^)]+)\)\s*$/.test(only.innerText || only.textContent || '') && soft(RegExp.$1) === soft(sku)));
+      const nameToks = soft(name || '').replace(/[&+/]/g, ' ').split(' ').filter(x => x.length > 3 && !['furori', 'kombucha', 'ikombucha'].includes(x));
+      const nameOk = nameToks.length >= 2 && nameToks.slice(0, 2).every(tok => t.includes(tok));
+      // Exact SKU typed into #product_code: one stock row with matching id OR label containing SKU
+      const typedExactSku = sku && soft(sku).length >= 3 && only.id && /^\d{5,}$/.test(String(only.id))
+        && (idOk || skuOk || soft(t).includes(soft(sku)));
+      if (idOk || skuOk || (nameOk && id && String(only.id) === String(id)) || typedExactSku) hit = only;
+    }
+    if (!hit) return { ok: false, texts: (texts.length ? texts : rawTexts).slice(0, 15), n: items.length || rawTexts.length };
+    const picked = clickLi(hit);
+    if (picked && picked.ok) return { ...picked, n: items.length, via: picked.via || 'menu' };
+    return { ok: true, id: hit.id, text: label(hit), n: items.length, via: 'menu' };
+  };
+}
+
+async function closeAllAutocompletes(page) {
+  // Only jQuery close + Escape. NEVER set ul.style.display='none' — that stuck inline and
+  // made later product searches report items=0 (Mentolime 922903, SGR, Sokata fallout).
+  await page.evaluate(() => {
+    try {
+      if (window.$) {
+        document.querySelectorAll('input').forEach(el => {
+          try {
+            const $el = window.$(el);
+            if ($el.data('ui-autocomplete') || $el.data('autocomplete')) $el.autocomplete('close');
+          } catch {}
+        });
+      }
+    } catch {}
+  }).catch(() => {});
+  await page.keyboard.press('Escape').catch(() => {});
+}
+
+/** Force jQuery UI to search after typing (SmartBill sometimes ignores pressSequentially alone). */
+async function triggerProductSearch(page, inputSel, text) {
+  await page.evaluate(({ inputSel, text }) => {
+    const e = document.querySelector(inputSel);
+    if (!e) return;
+    e.focus();
+    e.value = text;
+    e.dispatchEvent(new Event('input', { bubbles: true }));
+    e.dispatchEvent(new Event('keyup', { bubbles: true }));
+    e.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', keyCode: 40 }));
+    try {
+      if (window.$) {
+        const $e = window.$(e);
+        if ($e.data('ui-autocomplete') || $e.data('autocomplete')) $e.autocomplete('search', text);
+      }
+    } catch {}
+  }, { inputSel, text });
+}
+
+/**
+ * NUCLEAR bypass: call SmartBill's own productAutocompleteSelect with a known stock item.
+ * Works when autocomplete returns items=0 (Mentolime &, gestiune stock filter, slow cache).
+ * Does NOT invent products — requires real SmartBill id + Shopify SKU from match/pin.
+ */
+async function forceSelectKnownProduct(page, { id, sku, name, isService = false, unit = 'PCE' }) {
+  const result = await page.evaluate(({ id, sku, name, isService, unit }) => {
+    if (typeof window.productAutocompleteSelect !== 'function') {
+      return { ok: false, err: 'productAutocompleteSelect lipsa' };
+    }
+    const nm = String(name || sku || '').replace(/&amp;/gi, '&').trim();
+    const code = String(sku || '').trim();
+    const item = {
+      label: code ? `${nm} (${code})` : nm,
+      value: nm,
+      name: nm,
+      id: /^\d+$/.test(String(id)) ? Number(id) : id,
+      code,
+      measuring_unit_name: String(unit || 'PCE'),
+      price: '',
+      is_vat_included: false,
+      is_service: !!isService,
+      description: '',
+      nomenclator: true,
+      is_composed: false,
+      additionalData: {},
+      hasRecycleWarranty: null,
+      recycleWarranties: null,
+    };
+    try {
+      window.productAutocompleteSelect({ item });
+    } catch (e) {
+      return { ok: false, err: String(e && e.message || e) };
+    }
+    return {
+      ok: true,
+      code: (document.querySelector('#product_code') || {}).value || '',
+      name: (document.querySelector('#product_name') || {}).value || '',
+      via: 'force-select',
+    };
+  }, { id: String(id), sku: sku || '', name: name || '', isService: !!isService, unit: unit || 'PCE' });
+  await page.waitForTimeout(T(600));
+  return result;
+}
+
+/** Clear product line inputs between attempts / lines so leftover Mentolime search state dies.
+ *  Do NOT touch #product_gestiune — clearing it left invoice lines without warehouse. */
+async function resetProductLineInputs(page) {
+  await closeAllAutocompletes(page);
+  await page.evaluate(() => {
+    for (const sel of ['#product_name', '#product_code', '#product_description', '#price', '#quantity']) {
+      const e = document.querySelector(sel);
+      if (!e) continue;
+      e.value = '';
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }).catch(() => {});
+  await page.waitForTimeout(T(200));
+}
+
+/**
+ * Type into product field and click the BEST autocomplete row for this stock product.
+ * SmartBill often keeps the ul in DOM with items but Playwright :visible fails (opacity/offscreen).
+ * Wait for item COUNT on THIS field's menu, then click via DOM (id / SKU / name tokens + size).
+ */
+async function typeAndPickProduct(page, input, text, { id, sku, name }, { timeout = 20000 } = {}) {
+  timeout = T(timeout);
+  await closeAllAutocompletes(page);
+  const el = page.locator(input).first();
+  await el.click({ timeout: T(5000) });
+  await el.fill('');
+  await el.pressSequentially(text, { delay: 40 });
+  await triggerProductSearch(page, input, text);
+  const deadline = Date.now() + timeout;
+  let n = 0;
+  const countForField = async () => page.evaluate(({ inputSel, wantId }) => {
+    const soft = s => String(s || '').replace(/&amp;/gi, '&').replace(/\s+/g, ' ').trim().toLowerCase();
+    const noise = t => {
+      const x = soft(t);
+      return !x || /^adauga client|client-add-new/.test(x) || /^carrefour romania\b/.test(x)
+        || /^(pce|xpp|buc|kg|lei|ron)$/.test(x) || /^0160\b|gtin\s*-|global trade item/.test(x);
+    };
+    const shown = (ul) => {
+      if (!ul) return false;
+      const st = getComputedStyle(ul);
+      return st.display !== 'none' && st.visibility !== 'hidden' && Number(st.opacity || 1) > 0;
+    };
+    // Ready as soon as the wanted stock id exists in any autocomplete list
+    if (wantId && [...document.querySelectorAll('ul.ui-autocomplete li.ui-menu-item')]
+      .some(li => String(li.id) === String(wantId))) return 1;
+    const inputEl = document.querySelector(inputSel);
+    try {
+      if (inputEl && window.$) {
+        const $in = window.$(inputEl);
+        if ($in.data('ui-autocomplete') || $in.data('autocomplete')) {
+          const w = $in.autocomplete('widget')[0];
+          if (w) {
+            const lis = [...w.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
+            if (lis.length) return lis.length;
+          }
+        }
+      }
+    } catch {}
+    let best = 0;
+    for (const ul of document.querySelectorAll('ul.ui-autocomplete')) {
+      if (!shown(ul)) continue;
+      const lis = [...ul.querySelectorAll('li.ui-menu-item')].filter(li => !noise(li.innerText || li.textContent || ''));
+      if (lis.some(li => /client-add-new|adauga client/i.test(li.className + ' ' + (li.innerText || '')))) continue;
+      best = Math.max(best, lis.length);
+    }
+    return best;
+  }, { inputSel: input, wantId: id || null }).catch(() => 0);
+
+  while (Date.now() < deadline) {
+    n = await countForField();
+    if (n > 0) break;
+    if (Date.now() > deadline - timeout / 2) await triggerProductSearch(page, input, text).catch(() => {});
+    await page.waitForTimeout(T(250));
+  }
+  if (!n) throw new Error(`Dropdown produs lipsă după "${text}" in ${input} (waited ${timeout}ms, items=0)`);
+  await page.waitForTimeout(T(250));
+  let clicked = await page.evaluate(productAutocompleteItemsScript(), {
+    inputSel: input, id: id || null, sku: sku || null, name: name || null,
+  });
+  if (!clicked || !clicked.ok) {
+    // one retry: re-search then click by id/sku again (menu sometimes redraws)
+    await triggerProductSearch(page, input, text).catch(() => {});
+    await page.waitForTimeout(T(800));
+    clicked = await page.evaluate(productAutocompleteItemsScript(), {
+      inputSel: input, id: id || null, sku: sku || null, name: name || null,
+    });
+  }
+  if (!clicked || !clicked.ok) {
+    throw new Error(`Dropdown produs are ${clicked && clicked.n || n} iteme dar niciunul nu e stock id=${id} sku=${sku}. Vazute: ${JSON.stringify((clicked && clicked.texts) || [])}`);
+  }
+  await page.waitForTimeout(T(900));
+  return clicked;
+}
+
+/** Carrefour pieces: SmartBill UI often shows PCE; e-Factura / some products show XPP (UNECE). Same meaning. */
+function sameCarrefourUnit(a, b) {
+  const n = s => String(s || '').trim().toUpperCase();
+  const piece = new Set(['PCE', 'XPP', 'A', 'BUC', 'BUC.', 'PCS', 'EA', 'H87', 'C62']);
+  const aa = n(a), bb = n(b);
+  if (aa === bb) return true;
+  return piece.has(aa) && piece.has(bb);
+}
+/** Digits-only GTIN/EAN-looking product codes (8–14) — never invent these as new Cod. */
+function gtinLike(s) {
+  const d = String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+  return d.length >= 8 && d.length <= 14 && d === String(s || '').replace(/\D/g, '').replace(/^0+/, '');
+}
+
+/** Carrefour already sends SGR deposit as its own 0% line (GARANTIE PET/STICLA/SGR).
+ *  Do NOT rely on SmartBill "Produs cu garantie SGR = Da" (that auto-adds a duplicate Garantie line).
+ *  Use their EXISTING services: "Garantie SGR Plastic" (SGR plastic) / "Garantie SGR Sticla" (SGR sticla). */
+function isSgrDepositLine(l) {
+  if (Number(l.vat) !== 0) return false;
+  return /GARANTIE|SGR|\bPET\b|\bSTICLA\b|\bSTICL[AĂ]\b/i.test(String(l.name || '') + ' ' + String(l.carrefourCode || '') + ' ' + String(l.ean || ''));
+}
+
+/** True when selected VAT option text matches the resolved SmartBill label (ignore spaces/% formatting). */
+function vatTextsMatch(selected, want) {
+  const a = softNorm(selected);
+  const b = softNorm(typeof want === 'object' && want ? want.text : want);
+  if (!b) return true;
+  if (!a) return false;
+  return a === b || a.startsWith(b) || b.startsWith(a) || a.includes(b) || b.includes(a);
+}
+
+/** Uncheck "Descarca gestiune" so free-text/SGR lines without stock can save as draft. */
+async function disableStockDischarge(page, log) {
+  const info = await page.evaluate(() => {
+    // Only descarc* checkboxes — NEVER bare [name*=gestiune] (unrelated warehouse toggles).
+    const candidates = [
+      ...document.querySelectorAll('input[type=checkbox][name*="descarca" i], input[type=checkbox][id*="descarca" i]'),
+    ];
+    // also match by nearby label text
+    for (const inp of document.querySelectorAll('input[type=checkbox]')) {
+      const lab = (inp.labels && inp.labels[0] && inp.labels[0].innerText) || '';
+      const near = (inp.parentElement && inp.parentElement.innerText) || '';
+      if (/descarc[aă].*gestiune|gestiune.*descarc/i.test(lab + ' ' + near)) candidates.push(inp);
+    }
+    const seen = new Set(); const out = [];
+    for (const el of candidates) {
+      if (!el || seen.has(el)) continue; seen.add(el);
+      out.push({ id: el.id || null, name: el.name || null, checked: !!el.checked });
+      if (el.checked) {
+        el.checked = false;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (typeof window.$ === 'function') try { window.$(el).prop('checked', false).trigger('change'); } catch {}
+      }
+    }
+    return out;
+  });
+  if (info.length) log(`Descarcare gestiune: debifat pentru linii free-text/SGR (${info.map(x => (x.id || x.name || '?') + '=' + x.checked).join(', ')})`);
+  else log('Descarcare gestiune: nu am gasit checkbox (salvez oricum; SmartBill poate cere stoc)');
+  await page.waitForTimeout(T(400));
+  return info;
+}
+
+/** Force #product_name to Carrefour description (BT-153). Autocomplete often clears the field on blur -> empty name error. */
+async function setProductLineName(page, name) {
+  const want = String(name || '');
+  await page.keyboard.press('Escape').catch(() => {});
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.evaluate(v => {
+      const e = document.querySelector('#product_name');
+      if (!e) return;
+      e.focus();
+      e.value = v;
+      e.dispatchEvent(new Event('input', { bubbles: true }));
+      e.dispatchEvent(new Event('change', { bubbles: true }));
+      e.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+      // hide jQuery UI autocomplete if open (do not pick an item)
+      try { if (window.$) window.$(e).autocomplete('close'); } catch {}
+    }, want);
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(T(300));
+    // blur without relying on autocomplete selection
+    await page.locator('#quantity').click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(T(400));
+    let got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() === want.trim()) return got;
+    // SmartBill cleared it: type again more slowly
+    const pn = page.locator('#product_name');
+    await pn.click(); await pn.fill('');
+    await pn.pressSequentially(want, { delay: 25 });
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.locator('#price').click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(T(500));
+    // re-force after blur if emptied
+    got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() !== want.trim()) {
+      await page.evaluate(v => { const e = document.querySelector('#product_name'); if (e) { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); } }, want);
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+    got = (await page.inputValue('#product_name').catch(() => '')) || '';
+    if (got.trim() === want.trim()) return got;
+  }
+  return (await page.inputValue('#product_name').catch(() => '')) || '';
+}
+
+/**
+ * Search attempts for stock/SGR pick — pure (testable). #product_code first, then name, SKU variants.
+ * Never starts with generic "Furori kombucha …" alone (too many hits / chrome).
+ */
+function pickSearchAttempts(skuRaw, nameRaw) {
+  const sku = String(skuRaw || '').trim();
+  const name = String(nameRaw || '').replace(/&amp;/gi, '&').trim();
+  const attempts = [];
+  const push = (field, text) => {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!t) return;
+    if (attempts.some(a => a.field === field && a.text === t)) return;
+    attempts.push({ field, text: t });
+  };
+  if (sku) {
+    push('#product_code', sku);
+    push('#product_name', sku);
+    if (/\s/.test(sku)) {
+      push('#product_code', sku.replace(/\s+/g, ''));
+      push('#product_name', sku.replace(/\s+/g, ''));
+    }
+    // "fr pas500" → "fr pas 500", "frpas500"
+    const spacedSize = sku.match(/^(.+?)\s*(\d{3,4})$/i);
+    if (spacedSize && /\s/.test(sku)) {
+      push('#product_code', `${spacedSize[1].trim()} ${spacedSize[2]}`);
+      push('#product_name', `${spacedSize[1].trim()} ${spacedSize[2]}`);
+    }
+    if (/^sgr\b/i.test(sku)) {
+      const short = sku.replace(/^sgr\s+/i, '').trim();
+      if (short) {
+        push('#product_code', `SGR ${short}`);
+        push('#product_name', `SGR ${short}`);
+        push('#product_code', short);
+        push('#product_name', short);
+      }
+      push('#product_name', 'SGR');
+    }
+    // sokataF500 → sokata500 / "sokata 500" (non-greedy so "F" is the Furori marker, not eaten by [a-z]+)
+    const mF = sku.match(/^([a-z]+?)F(\d{3,4})$/i);
+    if (mF) {
+      push('#product_code', `${mF[1]}${mF[2]}`);
+      push('#product_name', `${mF[1]}${mF[2]}`);
+      push('#product_name', `${mF[1]} ${mF[2]}`);
+    }
+  }
+  if (name) {
+    // Keep "&" — SmartBill indexes "menta & lamaie"; stripping it caused Mentolime items=0.
+    const toks = softNorm(name).split(' ').filter(Boolean);
+    const sz = (toks.find(t => /^(330|500|750)$/.test(t)) || '');
+    const flavor = toks.filter(t => !['furori', 'kombucha', 'ikombucha', 'ml', 'buc', 'garantie', 'sgr', 'si', 'cu', 'de', '&', sz].includes(t) && !/^\d+$/.test(t));
+    if (flavor.length >= 2 && sz) {
+      push('#product_name', `${flavor[0]} & ${flavor[1]} ${sz}`);
+      push('#product_name', `${flavor[0]} ${flavor[1]} ${sz}`);
+    }
+    if (flavor.length && sz) push('#product_name', `${flavor.slice(0, 2).join(' ')} ${sz}`);
+    if (flavor.length === 1 && sz) push('#product_name', `${flavor[0]} ${sz}`);
+    if (flavor.length >= 2) push('#product_name', flavor.slice(0, 3).join(' '));
+    const withAmp = name.replace(/\s+/g, ' ').trim();
+    push('#product_name', withAmp.split(/\s+/).slice(0, 5).join(' '));
+    push('#product_name', withAmp.split(/\s+/).slice(0, 7).join(' '));
+  }
+  return attempts;
+}
+
+/**
+ * Verify pick landed on the expected Shopify/SGR SKU (or known stock id).
+ * NEVER rewrite #product_code on mismatch — that hid junk PET/sticla picks behind the right SKU.
+ */
+async function verifyPickedProduct(page, { id, sku, name }) {
+  const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+  const nameNow = softNorm(await page.inputValue('#product_name').catch(() => ''));
+  const skuOk = !!(sku && (softNorm(codeNow) === softNorm(sku)
+    || softNorm(codeNow).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '')));
+  // Optional: confirm stock id from SmartBill internal product form state when exposed
+  const idNow = await page.evaluate(() => {
+    const e = document.querySelector('#product_id, input[name="product_id"], #id_product');
+    return e ? String(e.value || '').trim() : null;
+  }).catch(() => null);
+  const idOk = !!(id && idNow && String(idNow) === String(id));
+  const nameToks = softNorm(name || '').replace(/[&+/]/g, ' ').split(' ').filter(t => t.length > 2 && !['furori', 'kombucha', 'ikombucha', 'garantie', 'sgr', 'ml', 'buc'].includes(t));
+  const nameOk = nameToks.length >= 2 && nameToks.slice(0, 2).every(t => nameNow.includes(t));
+  // Accept only SKU match, or id match with name tokens (never name-only — junk GARANTIE STICLA passes "sticla")
+  const ok = skuOk || (idOk && nameOk);
+  return { ok, codeNow, nameNow, skuOk, nameOk, idOk, id };
+}
+
+/**
+ * Pick EXISTING SmartBill stock/SGR service.
+ * 1) SKU via #product_code / #product_name (short timeout)
+ * 2) NUCLEAR: productAutocompleteSelect with known id+SKU (Mentolime items=0 bypass)
+ * 3) Remaining name-token attempts only if force-select unavailable
+ * Never invents products.
+ */
+async function pickExistingProduct(page, l, log) {
+  const id = String(l.smartbill.id);
+  const sku = String(l.smartbill.code || l.smartbill.Cod || '').trim();
+  const name = String(l.smartbill.name || l.smartbill.Denumire || '').replace(/&amp;/gi, '&').trim();
+  const isService = !!(l._sgrService || isSgrDepositLine(l) || /^sgr\b/i.test(sku) || /garantie\s*sgr/i.test(name));
+  const attempts = pickSearchAttempts(sku, name);
+  // Prefer SKU-only attempts first (fast). Long names with "&" last — they often return items=0.
+  const skuAttempts = attempts.filter(a => softNorm(a.text) === softNorm(sku) || softNorm(a.text).replace(/\s+/g, '') === softNorm(sku).replace(/\s+/g, '') || /^sgr\b/i.test(a.text) || /^(sticla|plastic|sokata|mentolime|ghimbir)/i.test(a.text));
+  const firstWave = (skuAttempts.length ? skuAttempts : attempts.slice(0, 4)).slice(0, 6);
+
+  await resetProductLineInputs(page);
+  await dismissBlockingDialogs(page, log);
+
+  let lastErr;
+  for (const a of firstWave) {
+    try {
+      await resetProductLineInputs(page);
+      await dismissBlockingDialogs(page, log);
+      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 10000 });
+      await page.waitForTimeout(T(400));
+      const v = await verifyPickedProduct(page, { id, sku, name });
+      if (!v.ok) throw new Error(`dupa click, cod="${v.codeNow}" nume="${v.nameNow}" (asteptam SKU ${sku})`);
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku || v.codeNow}" via ${a.field}="${a.text}" (cod=${v.codeNow || sku}, dd=${used.text || ''}, ${used.via || ''})`);
+      return { ...a, via: used.via || 'menu' };
+    } catch (e) {
+      lastErr = e;
+      log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
+    }
+  }
+
+  // Mentolime 922903 etc.: dropdown items=0 — call SmartBill select directly with known stock id.
+  try {
+    await resetProductLineInputs(page);
+    await dismissBlockingDialogs(page, log);
+    log(`Linie pick FORCE select id ${id} SKU "${sku}" (bypass autocomplete items=0)`);
+    const unit = isService ? 'buc' : 'PCE';
+    const forced = await forceSelectKnownProduct(page, { id, sku, name, isService, unit });
+    if (!forced || !forced.ok) throw new Error(forced && forced.err || 'force-select failed');
+    const v = await verifyPickedProduct(page, { id, sku, name });
+    if (!v.ok) throw new Error(`force-select: cod="${v.codeNow}" nume="${v.nameNow}" (asteptam ${sku})`);
+    log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via force-select (cod=${v.codeNow})`);
+    return { field: '#product_name', text: sku, via: 'force-select' };
+  } catch (e) {
+    lastErr = e;
+    log(`Linie pick force-select id ${id}: ${String(e.message || e).split('\n')[0]}`);
+  }
+
+  // Last resort: remaining name attempts (without burning 20s each)
+  const rest = attempts.filter(a => !firstWave.some(f => f.field === a.field && f.text === a.text)).slice(0, 4);
+  for (const a of rest) {
+    try {
+      await resetProductLineInputs(page);
+      await dismissBlockingDialogs(page, log);
+      const used = await typeAndPickProduct(page, a.field, a.text, { id, sku, name }, { timeout: 8000 });
+      const v = await verifyPickedProduct(page, { id, sku, name });
+      if (!v.ok) throw new Error(`dupa click, cod="${v.codeNow}" nume="${v.nameNow}"`);
+      log(`Linie pick OK: SmartBill id ${id} SKU "${sku}" via ${a.field}="${a.text}" (fallback name)`);
+      return { ...a, via: used.via || 'menu' };
+    } catch (e) {
+      lastErr = e;
+      log(`Linie pick try ${a.field}="${a.text}" id ${id}: ${String(e.message || e).split('\n')[0]}`);
+    }
+  }
+
+  throw lastErr || new Error(`Nu am putut selecta produsul din stock SmartBill id ${id} (${sku || name})`);
+}
+
+/** True free-text ONLY when no Shopify match exists (e.g. rare SGR). No CF-* codes — those created junk products. */
+async function fillFreeTextProduct(page, l, i, result) {
+  await setProductLineName(page, l.name);
+  // Leave #product_code empty or keep whatever SmartBill set — never invent CF-{ean}/EAN codes.
+  (result.freeTextLines = result.freeTextLines || []).push({
+    line: i + 1, name: l.name, code: await page.inputValue('#product_code'), sgrFallback: !!l._sgrFreeTextFallback,
+  });
 }
 async function setDate(page, prefix, iso) {
   const { d, m, y } = dmy(iso);
@@ -63,11 +716,149 @@ async function selectByText(page, sel, re) {
   return val;
 }
 
+/**
+ * Pure VAT picker for SmartBill option labels (Pure Therapy: "21 %", "0 % - SGR", "0 % - SDD", …).
+ * 0% → SGR first, then SDD, then any 0%; never prefer bare "0 %" over named SGR/SDD.
+ */
+function resolveVatOption(availableTexts, vatRate) {
+  const available = (availableTexts || []).map(t => String(t || '').trim()).filter(Boolean);
+  const rate = Number(vatRate);
+  if (rate === 0) {
+    const sgr = available.find(t => /^SGR$/i.test(t))
+      || available.find(t => /0\s*%\s*-\s*SGR/i.test(t))
+      || available.find(t => /\bSGR\b/i.test(t));
+    if (sgr) return { kind: 'SGR', text: sgr };
+    const sdd = available.find(t => /^SDD$/i.test(t))
+      || available.find(t => /0\s*%\s*-\s*SDD/i.test(t))
+      || available.find(t => /\bSDD\b/i.test(t))
+      || available.find(t => /scutit.*taxa|exempt/i.test(t) && /0\s*%/.test(t));
+    if (sdd) return { kind: 'SDD', text: sdd };
+    const zero = available.find(t => /^0\s*%/i.test(t));
+    if (zero) return { kind: '0%', text: zero };
+    return { kind: null, text: null, available };
+  }
+  const exact = available.find(t => new RegExp(`^${rate}\\s*%$`).test(t));
+  if (exact) return { kind: 'rate', text: exact };
+  // "21 % - Normal" / "21%" with trailing note
+  const prefix = available.find(t => new RegExp(`^${rate}\\s*%`).test(t));
+  if (prefix) return { kind: 'rate', text: prefix };
+  return { kind: null, text: null, available };
+}
+
+/** Select VAT rate with 0% SGR/SDD mapping: 0% lines -> "SGR" first, fallback "SDD", never bare "0%" over SGR. */
+async function selectVatCode(page, vatRate) {
+  const opts = await page.$$eval('#vat_code option', opts => opts.map(o => ({ text: o.text, value: o.value })));
+  const available = opts.map(o => o.text.trim());
+  if (process.env.KIT_DEBUG) console.log('DEBUG selectVatCode options:', JSON.stringify(available));
+  const resolved = resolveVatOption(available, vatRate);
+  if (!resolved || !resolved.text) {
+    if (Number(vatRate) === 0) {
+      throw Object.assign(new Error(`Cota de TVA 0% (SGR/garanție returabilă) cerută de comandă nu există în SmartBill. Opțiuni disponibile: ${available.join(', ')}. Adaugă o cotă numită "SGR" la 0% / E - Scutit în SmartBill (Configurare > Cote TVA).`), { code: 'NEEDS_HUMAN', availableOptions: available });
+    }
+    throw Object.assign(new Error(`Cota de TVA ceruta de comanda (${vatRate}%) nu exista in SmartBill. Verifica cotele TVA in SmartBill (Configurare > Taxe) si comanda in portal. Opțiuni: ${available.join(', ')}`), { code: 'NEEDS_HUMAN', availableOptions: available });
+  }
+  const esc = resolved.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  await selectByText(page, '#vat_code', new RegExp(`^\\s*${esc}`));
+  if (resolved.kind === 'SGR') return `SGR (matched: ${resolved.text})`;
+  if (resolved.kind === 'SDD') return `SDD (matched: ${resolved.text})`;
+  if (resolved.kind === '0%') return `0% (${resolved.text})`;
+  return `${vatRate}%`;
+}
+
 async function dismissNotices(page) {
   for (let i = 0; i < 3; i++) {
     const b = page.locator('.modal.in a, .modal.in button, .modal.show a, .modal.show button').filter({ hasText: /^\s*(Am inteles|Inchide|OK)\s*$/i }).first();
     if (!(await b.count()) || !(await b.isVisible().catch(() => false))) return;
     await b.click().catch(() => {}); await page.waitForTimeout(700);
+  }
+}
+
+/** If #product_gestiune exists and is empty/0, select the first real warehouse option. */
+async function ensureLineGestiune(page, log = () => {}) {
+  const info = await page.evaluate(() => {
+    const g = document.querySelector('#product_gestiune');
+    if (!g) return { found: false };
+    const opts = [...g.options].map(o => ({ v: String(o.value || ''), t: (o.text || '').trim() }));
+    const cur = String(g.value || '');
+    if (cur && cur !== '0' && cur !== '-1') return { found: true, value: cur, text: g.selectedOptions[0] && g.selectedOptions[0].text.trim(), kept: true };
+    const pick = opts.find(o => o.v && o.v !== '0' && o.v !== '-1' && o.t && !/^select|alege|fara|fără|nici/i.test(o.t));
+    if (!pick) return { found: true, value: cur, options: opts.slice(0, 8), picked: null };
+    g.value = pick.v;
+    g.dispatchEvent(new Event('change', { bubbles: true }));
+    try { if (window.$) window.$(g).val(pick.v).trigger('change'); } catch {}
+    return { found: true, value: pick.v, text: pick.t, picked: true };
+  });
+  if (info.found && info.picked) log(`Gestiune linie: selectat "${info.text}" (${info.value})`);
+  else if (info.found && info.kept) log(`Gestiune linie: pastrat "${info.text}" (${info.value})`);
+  else if (info.found) log('Gestiune linie: camp prezent dar fara optiune utila');
+  return info;
+}
+
+/**
+ * Prevent SmartBill from writing invoice line names into the stock nomenclator.
+ * Live proof (Delios): after Carrefour rename, add_product becomes true while id stays set —
+ * that is what renamed Pure Therapy products. Gate: add_product=false always; detach id when
+ * line name ≠ Shopify/stock name; keep Shopify SKU on product_code.
+ */
+async function applyNomenclatorSafetyGate(page, plan, cfg) {
+  const keepPayload = (plan.lines || []).map(l => {
+    const sku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim() || null;
+    const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
+    const renamed = !!(cfg.smartbill?.carrefourLineName && l.name && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
+    return {
+      sku,
+      keepId: !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText && !renamed),
+      id: l.smartbill && l.smartbill.id ? String(l.smartbill.id) : null,
+      renamed,
+    };
+  });
+  const was = await page.evaluate((payload) => (window.products || []).map((p, i) => {
+    const prev = { id: p.id, add_product: p.add_product, code: p.product_code, name: p.product_name };
+    if (!p.is_discount) {
+      p.add_product = false;
+      const row = payload[i] || {};
+      if (row.sku) p.product_code = row.sku;
+      if (row.keepId && row.id) p.id = row.id;
+      else {
+        p.id = null;
+        if (/^CF-/i.test(String(p.product_code || ''))) p.product_code = '';
+      }
+    }
+    return prev;
+  }), keepPayload);
+  const state = await page.evaluate(() => (window.products || []).map(p => ({
+    name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description,
+  })));
+  for (const [i, st] of state.entries()) {
+    if (st.add_product) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
+    if (/^CF-/i.test(String(st.code || ''))) throw new Error(`STOP: linia ${i + 1} are cod CF-* (${st.code}) — ar crea produs nou. Foloseste SKU Shopify.`);
+    if (keepPayload[i] && keepPayload[i].renamed && st.id) {
+      throw new Error(`STOP: linia ${i + 1} are nume Carrefour dar inca e legata de produsul stock id=${st.id} — ar redenumi nomenclatorul.`);
+    }
+  }
+  return { was, state, keepPayload };
+}
+
+/** Close SmartBill blocking dialogs that intercept clicks (product-code prefill, nomenclator, info).
+ *  Prefill "Exista un produs cu acest cod..." -> Nu: keep Carrefour typed line (name/VAT/SGR), never pull nomenclator SGR auto. */
+async function dismissBlockingDialogs(page, log = () => {}) {
+  for (let i = 0; i < 5; i++) {
+    const wrap = page.locator('.ui-dialog-wrapper.visible, .ui-dialog:visible, .modal.in, .modal.show, .swal2-popup:visible').first();
+    if (!(await wrap.count().catch(() => 0)) || !(await wrap.isVisible().catch(() => false))) return;
+    const text = ((await wrap.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    // product exists with this code -> prefill? Always Nu for Carrefour free-text / SGR path
+    if (/Exista un produs cu acest cod|precompletarea datelor/i.test(text)) {
+      const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
+      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); log('Dialog precompletare produs: Nu'); continue; }
+    }
+    if (/Introducere in nomenclator|Actualiz.*nomenclator|salvezi produsul|modific.*produs.*nomenclator/i.test(text)) {
+      const nu = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*Nu\s*$/i }).first();
+      if (await nu.count()) { await nu.click(); await page.waitForTimeout(T(800)); log('Dialog nomenclator: Nu'); continue; }
+    }
+    const ok = wrap.locator('button, a.btn, .ui-button').filter({ hasText: /^\s*(OK|Am inteles|Inchide|Nu)\s*$/i }).first();
+    if (await ok.count() && await ok.isVisible().catch(() => false)) { await ok.click().catch(() => {}); await page.waitForTimeout(T(700)); continue; }
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(T(400));
   }
 }
 
@@ -179,11 +970,30 @@ async function run(profile, opts = {}) {
   const plan = { order, issueDate: todayIso(), dueDate: addDays(todayIso(), cfg.smartbill?.dueDays || 7), series: cfg.smartbill?.series,
     despatchId: order.despatchId || rnd15(), clientCif: cf.client.cif, lines: [] };
   for (const l of order.lines) {
-    const m = matchLine(l, products, pinned);
-    // no (unique) product in the SmartBill list: with carrefourLineName the line is typed as free text (never saved to the list)
-    if ((!m || m.ambiguous) && cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) { plan.lines.push({ ...l, smartbill: null, freeText: true }); continue; }
+    let m = matchLine(l, products, pinned);
+    // SGR must resolve to existing services SGR plastic / SGR sticla — never invent a new GARANTIE line
+    if (isSgrDepositLine(l)) {
+      const code = m && !m.ambiguous ? String(m.code || m.Cod || '').trim() : '';
+      if (!m || m.ambiguous || !/^SGR\b/i.test(code)) {
+        throw Object.assign(new Error(
+          `Linia SGR "${l.name}" (EAN ${l.ean}): trebuie serviciul existent „Garantie SGR Plastic” (cod SGR plastic) sau „Garantie SGR Sticla” (cod SGR sticla). Nu creez produs nou${code ? ` (gasit cod "${code}")` : ''}.`
+        ), { code: 'NEEDS_HUMAN' });
+      }
+    }
+    // Unmatched drink / kombucha lines must NEVER free-text (that created PET/EVA junk and wrong ciorne).
+    // Optional free-text only for non-drink unknowns when auto.allowFreeTextDraft is set.
+    if ((!m || m.ambiguous) && !isSgrDepositLine(l)) {
+      const drinkLike = /KOMBUCHA|IKOMBUCHA|SOKATA|ZMEUR|MENTOLIME|GHIMBIR|PASSION|PASIUN|ROOIB|TRANDAFIR|\bMENTA\b|\bSOC\b/i.test(String(l.name || ''));
+      if (drinkLike || !cfg.auto?.allowFreeTextDraft) {
+        throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m && m.ambiguous ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista / nu se potriveste unic in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu SKU-ul Shopify corect, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
+      }
+      if (cfg.smartbill?.carrefourLineName && l.name && l.vat != null && l.price != null) {
+        plan.lines.push({ ...l, smartbill: null, freeText: true });
+        continue;
+      }
+    }
     if (!m || m.ambiguous) throw Object.assign(new Error(`Produsul "${l.name}" (EAN ${l.ean}) ${m ? 'se potriveste cu mai multe produse din SmartBill: ' + m.ambiguous.join('; ') : 'nu exista in lista de produse SmartBill'}. Adauga-l in SmartBill (Nomenclatoare > Produse) cu acelasi cod EAN, apoi incearca din nou.`), { code: 'NEEDS_HUMAN' });
-    plan.lines.push({ ...l, smartbill: m });
+    plan.lines.push({ ...l, smartbill: m, _sgrService: isSgrDepositLine(l) });
   }
   // automat/--issue: a line without a SmartBill product is never ISSUED unattended (free text needs a person's eye); drafts are fine
   if (opts.issue && !draftOnly && plan.lines.some(l => l.freeText) && !cfg.auto?.allowFreeText)
@@ -196,12 +1006,36 @@ async function run(profile, opts = {}) {
   const result = { out, plan: path.join(out, 'plan.json'), mode: issue ? 'issue' : 'fill-only' };
   try {
     { const dup = await alreadyIssued(page, profile, order, cf); result.duplicateCheck = dup || 'ok'; if (dup) throw Object.assign(new Error(dup.text), { code: dup.kind === 'unclear' ? 'NEEDS_HUMAN' : 'DUPLICATE', kind: dup.kind, draftId: dup.draftId || null }); }
-    await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded' }); await page.waitForTimeout(7000); await dismissCookies(page);
+    await page.goto(`${BASE}/documente/emitere/factura/`, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForTimeout(7000); await dismissCookies(page);
 
     // header
-    if (cfg.company?.cif) await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`));
+    // company CIF selector: optional (SmartBill UI may not show it for single-company accounts)
+    if (cfg.company?.cif) {
+      const hasCifSelector = await page.locator('#company_cifs').count().catch(() => 0);
+      if (hasCifSelector) { await selectByText(page, '#company_cifs', new RegExp(`^${cfg.company.cif}$`)); result.companyCifSelected = true; }
+      else result.companyCifSelector = 'not-found-skipped';
+    }
     await typeAndPick(page, '#client_name', cf.client.cif.replace(/^RO/i, ''), { hasText: cf.client.cif.replace(/^RO/i, '') });
     await page.waitForTimeout(2500);
+    {
+      const wantCif = String(cf.client.cif || '').replace(/^RO/i, '');
+      const clientCheck = await page.evaluate((want) => {
+        const dig = s => String(s || '').replace(/\D/g, '');
+        const fields = ['#client_cif', '#client_vat_code', 'input[name="client_cif"]', '#cif'];
+        let cif = '';
+        for (const sel of fields) {
+          const e = document.querySelector(sel);
+          if (e && e.value) { cif = e.value; break; }
+        }
+        const name = ((document.querySelector('#client_name') || {}).value || '').trim();
+        const bodyHit = dig(document.body.innerText || '').includes(dig(want));
+        return { cif, name, ok: dig(cif).includes(dig(want)) || (dig(want) && bodyHit && /carrefour/i.test(name)) };
+      }, wantCif);
+      result.clientCheck = clientCheck;
+      if (!clientCheck.ok) {
+        throw new Error(`Clientul selectat nu e Carrefour (CIF asteptat ${cf.client.cif}, gasit cif="${clientCheck.cif}" name="${clientCheck.name}")`);
+      }
+    }
     await setDate(page, '', plan.issueDate);
     // due date typed directly (choosing "7 zile" in the list pops a "default term for this client" notice)
     await setDate(page, 'due', plan.dueDate);
@@ -285,22 +1119,44 @@ async function run(profile, opts = {}) {
     if (order.deliveryDate) { if (!(await page.isChecked('#deliveryDateCB'))) await page.check('#deliveryDateCB'); await setDate(page, 'delivery', order.deliveryDate); }
 
     // lines
+    // Drinks: pick EXISTING Shopify/SmartBill stock by SKU.
+    // SGR: pick EXISTING services "Garantie SGR Plastic" / "Garantie SGR Sticla" (Tip=serviciu). Never invent.
     for (const [i, l] of plan.lines.entries()) {
-      if (l.freeText) { const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 30 }); await page.waitForTimeout(T(1500)); await page.locator('#quantity').click(); await page.waitForTimeout(T(500));
-        // product not in the producer's SmartBill list: SmartBill requires a product code on the line -> use the EAN (line only, never saved to the list)
-        if (!(await page.inputValue('#product_code')) && (l.ean || l.carrefourCode)) await setField(page, '#product_code', String(l.ean || l.carrefourCode), { pickExact: false, blurTo: '#quantity' });
-        (result.freeTextLines = result.freeTextLines || []).push({ line: i + 1, name: l.name, code: await page.inputValue('#product_code') }); }
-      else { const id = l.smartbill.id;
-        await typeAndPick(page, '#product_name', (l.smartbill.name || l.name).split(' ').slice(0, 4).join(' '), { has: page.locator(`xpath=self::li[@id="${id}"]`) }); }
+      const sgrLine = isSgrDepositLine(l) || !!l._sgrService;
+      await dismissBlockingDialogs(page, log);
+      if (!sgrLine && (l.freeText || !l.smartbill || !l.smartbill.id)) {
+        l.freeText = true;
+        await fillFreeTextProduct(page, l, i, result);
+        await dismissBlockingDialogs(page, log);
+      } else {
+        try {
+          const used = await pickExistingProduct(page, l, log);
+          l._pickedExisting = true;
+          (result.pickedExisting = result.pickedExisting || []).push({
+            line: i + 1, name: l.name, smartbillId: l.smartbill.id, shopifySku: l.smartbill.code || l.smartbill.Cod || null, via: used,
+          });
+        } catch (pickErr) {
+          // Do NOT invent a new product. Fail this order so a human picks the real Shopify SKU.
+          throw Object.assign(new Error(
+            `Comanda ${order.orderNo} linia ${i + 1} (${l.name}): am gasit produsul Shopify in lista (id ${l.smartbill.id}, cod ${l.smartbill.code || l.smartbill.Cod || '?'}) dar SmartBill autocomplete nu l-a selectat. Reincearca (opt. 2) sau alege manual produsul cu SKU-ul Shopify. Detaliu: ${String(pickErr.message || pickErr).split('\n')[0]}`
+          ), { code: 'NEEDS_HUMAN' });
+        }
+        await dismissBlockingDialogs(page, log);
+      }
+      // If SmartBill shows a gestiune dropdown on the line, keep/select a real warehouse
+      // (we no longer clear it during pick). Empty gestiune forces manual fix on invoices.
+      (result.gestiuneLine = result.gestiuneLine || []).push({ line: i + 1, ...(await ensureLineGestiune(page, log)) });
       await page.fill('#quantity', String(l.qty));
       await page.fill('#price', String(l.price));
-      await selectByText(page, '#vat_code', new RegExp(`^${l.vat}\\s*%$`));
+      const selectedVat = await selectVatCode(page, l.vat);
       await page.check('#is_vat_included_no');
+      (result.vatMapping = result.vatMapping || []).push({ line: i + 1, requested: l.vat, selected: selectedVat, sgrDeposit: sgrLine, freeTextFallback: !!l._sgrFreeTextFallback });
       const bt156 = page.locator('#id-product-additional-field-buyersItemIdentification');
       if (!(await bt156.isVisible())) { await page.locator('xpath=//*[normalize-space(text())="DETALII PRODUS"]/ancestor::*[contains(@class,"row") or contains(@class,"flex")][1]//*[contains(@class,"edit") or contains(@class,"pencil") or contains(@class,"pen")]').first().click(); await page.waitForTimeout(800); }
       await bt156.fill(String(l.carrefourCode || ''));
       await page.fill('#id-product-additional-field-standardItemIdentifier', String(l.ean || ''));
       if (l.ean) await typeAndPick(page, '#id-product-additional-field-standardItemIdentifierTypeId', '0160', { hasText: '0160' }).catch(e => log('tip EAN: ' + e.message.split('\n')[0]));
+      await dismissBlockingDialogs(page, log); // e.g. "Exista un produs cu acest cod...?" after code/EAN
       result.lineDescription = result.lineDescription || [];
       // BT-154 item description = Carrefour product name (line only; the product itself is not renamed)
       try {
@@ -309,44 +1165,167 @@ async function run(profile, opts = {}) {
         result.lineDescription.push({ line: i + 1, before, now: await page.inputValue('#product_description') });
       } catch (e) { result.lineDescription.push({ line: i + 1, error: e.message.split('\n')[0] }); }
       // Carrefour-only unit (mapped to UNECE XPP in SmartBill; "buc" stays H87 for everybody else)
+      await dismissBlockingDialogs(page, log);
       if (cfg.smartbill?.carrefourUnit) { const v = await setField(page, '#measuring_unit', cfg.smartbill.carrefourUnit, { blurTo: '#quantity' });
-        if (v !== cfg.smartbill.carrefourUnit) throw new Error(`U.M. nu s-a putut seta: este "${v}", trebuia "${cfg.smartbill.carrefourUnit}"`); }
+        if (!sameCarrefourUnit(v, cfg.smartbill.carrefourUnit)) throw new Error(`U.M. nu s-a putut seta: este "${v}", trebuia "${cfg.smartbill.carrefourUnit}"`); }
       // supplier item code (BT-155) only when explicitly enabled; never saved to the product list (see nomenclature gate)
-      if (cfg.smartbill?.useOrderSellerCode && l.sellerCode) { const pc = page.locator('#product_code'); await pc.click(); await pc.fill(''); await pc.pressSequentially(String(l.sellerCode), { delay: 60 }); await page.waitForTimeout(1500); await page.locator('#price').click(); await page.waitForTimeout(800);
+      if (cfg.smartbill?.useOrderSellerCode && l.sellerCode) { const pc = page.locator('#product_code'); await pc.click(); await pc.fill(''); await pc.pressSequentially(String(l.sellerCode), { delay: 60 }); await page.waitForTimeout(1500); await dismissBlockingDialogs(page, log); await page.locator('#price').click(); await page.waitForTimeout(800);
         result.afterCode = { code: await pc.inputValue(), name: await page.inputValue('#product_name'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), desc: await page.inputValue('#product_description').catch(() => null),
           dialogs: await page.evaluate(() => [...document.querySelectorAll('.modal, .ui-dialog')].filter(m => m.offsetParent || getComputedStyle(m).display === 'block').map(m => m.innerText.replace(/\s+/g, ' ').trim().slice(0, 200))) }; }
       // BT-153 line name = Carrefour description, typed over the picked product's name ON THIS LINE ONLY.
       // The product itself is never renamed: the line is sent with add_product=false / id=null (see below + gate).
       if (cfg.smartbill?.carrefourLineName && l.name) {
-        const pn = page.locator('#product_name'); await pn.click(); await pn.fill(''); await pn.pressSequentially(String(l.name), { delay: 40 }); await page.waitForTimeout(1500);
-        await page.locator('#price').click(); await page.waitForTimeout(1000);
-        result.afterName = { name: await pn.inputValue(), code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
-        if (result.afterName.name !== String(l.name)) throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name})`);
-        if (cfg.smartbill?.carrefourUnit && result.afterName.um !== cfg.smartbill.carrefourUnit) throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        const already = ((await page.inputValue('#product_name').catch(() => '')) || '').trim();
+        const got = already === String(l.name).trim() ? already : await setProductLineName(page, l.name);
+        // re-apply unit / buyer code / price if SmartBill reset them while renaming the line
+        if (cfg.smartbill?.carrefourUnit) {
+          const umNow = ((await page.inputValue('#measuring_unit').catch(() => '')) || '').trim();
+          if (!sameCarrefourUnit(umNow, cfg.smartbill.carrefourUnit)) {
+            await setField(page, '#measuring_unit', cfg.smartbill.carrefourUnit, { blurTo: '#quantity' });
+          }
+        }
+        // Carrefour e-Factura ids on the LINE (not the Shopify SKU): BT-156 buyer code, BT-157 EAN
+        if (l.carrefourCode) await bt156.fill(String(l.carrefourCode));
+        if (l.ean) await page.fill('#id-product-additional-field-standardItemIdentifier', String(l.ean));
+        if (String(await page.inputValue('#price')) !== String(l.price) && Number(await page.inputValue('#price')) !== Number(l.price)) {
+          await page.fill('#price', String(l.price));
+        }
+        result.afterName = { name: got, code: await page.inputValue('#product_code'), um: await page.inputValue('#measuring_unit'), price: await page.inputValue('#price'), vat: await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null), bt156: await bt156.inputValue() };
+        if (String(result.afterName.name || '').trim() !== String(l.name).trim()) {
+          throw new Error(`Numele liniei nu s-a putut seta (${result.afterName.name || ''}) — SmartBill a golit campul dupa scriere; reincerca.`);
+        }
+        // PCE (SmartBill display) and XPP (e-Factura UNECE) are the same Carrefour "bucati" unit
+        if (cfg.smartbill?.carrefourUnit && !sameCarrefourUnit(result.afterName.um, cfg.smartbill.carrefourUnit)) {
+          throw new Error('U.M. s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        }
         if (String(result.afterName.price) !== String(l.price) && Number(result.afterName.price) !== Number(l.price)) throw new Error('Pretul s-a schimbat dupa numele liniei: ' + JSON.stringify(result.afterName));
+        // BT-153 rename can reset VAT (SGR services often default to SDD) — re-select and assert.
+        // Compare option TEXT only (resolveVatOption returns {kind,text}; selectVatCode returns a log label).
+        const vatWant = resolveVatOption(await page.$$eval('#vat_code option', opts => opts.map(o => (o.text || '').trim()).filter(Boolean)), l.vat);
+        const vatNow = result.afterName.vat;
+        if (vatWant && vatWant.text && !vatTextsMatch(vatNow, vatWant.text)) {
+          await selectVatCode(page, l.vat);
+          const afterVat = await page.$eval('#vat_code', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
+          result.afterName.vat = afterVat;
+          result.afterName.vatReselected = true;
+          if (!vatTextsMatch(afterVat, vatWant.text)) {
+            throw new Error(`TVA s-a schimbat dupa numele liniei: este "${afterVat}", trebuia "${vatWant.text}"`);
+          }
+        }
+        const qtyNow = ((await page.inputValue('#quantity').catch(() => '')) || '').trim();
+        if (Number(qtyNow) !== Number(l.qty)) {
+          await page.fill('#quantity', String(l.qty));
+          result.afterName.qtyRestored = true;
+        }
+      }
+      // Product mapping for Carrefour:
+      //  - PICK existing SmartBill/Shopify product (SKU as Cod)
+      //  - Invoice LINE gets Carrefour name (BT-153), buyer code BT-156, EAN BT-157, PCE unit
+      //  - product_code stays the Shopify SKU — never CF-{ean} (that created junk nomenclator rows)
+      await dismissBlockingDialogs(page, log);
+      {
+        const shopifySku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim();
+        const matched = !!(l._pickedExisting && l.smartbill && l.smartbill.id && !l.freeText);
+        const codeWant = matched && shopifySku ? shopifySku : '';
+        const codeNow = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+        // Strip accidental CF-/EAN codes; restore Shopify SKU after pick
+        if (matched && shopifySku && (codeNow !== shopifySku || /^CF-/i.test(codeNow) || (gtinLike(codeNow) && codeNow !== shopifySku))) {
+          await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, shopifySku);
+          await page.keyboard.press('Escape').catch(() => {});
+          await dismissBlockingDialogs(page, log);
+        } else if (!matched && /^CF-/i.test(codeNow)) {
+          // free-text: clear CF junk code so SmartBill does not offer "Introducere in nomenclator"
+          await page.evaluate(() => { const e = document.querySelector('#product_code'); if (e) e.value = ''; });
+          await page.keyboard.press('Escape').catch(() => {});
+        }
+        (result.productCodeEnsured = result.productCodeEnsured || []).push({
+          line: i + 1, code: await page.inputValue('#product_code'), shopifySku: shopifySku || null, matched, carrefourEan: l.ean || null, carrefourCode: l.carrefourCode || null,
+        });
+        (result.lineMapping = result.lineMapping || []).push({
+          line: i + 1,
+          carrefourName: l.name,
+          shopifyName: (l.smartbill && l.smartbill.name) || null,
+          shopifySku: shopifySku || null,
+          smartbillId: (l.smartbill && l.smartbill.id) || null,
+          how: (l.smartbill && l.smartbill.how) || (l.freeText ? 'free-text' : null),
+          ean: l.ean || null,
+          carrefourCode: l.carrefourCode || null,
+          pickedExisting: !!l._pickedExisting,
+        });
+        if (matched && !((await page.inputValue('#product_code').catch(() => '')) || '').trim()) {
+          throw new Error(`Linia ${i + 1} (${l.name}): dupa pick, codul Shopify SKU e gol — opresc ca sa nu creez produs nou.`);
+        }
       }
       await shot(`20-linie-${i + 1}-inainte-adauga`);
-      await page.click('#add_product_btn'); await page.waitForTimeout(2000);
+      await dismissBlockingDialogs(page, log);
+      // silent re-ensure code one last time (shot/dialogs may have cleared it)
+      {
+        const c = ((await page.inputValue('#product_code').catch(() => '')) || '').trim();
+        const ens = (result.productCodeEnsured || []).slice(-1)[0];
+        if (!c && ens && ens.code) await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, ens.code);
+      }
+      try {
+        await page.click('#add_product_btn', { timeout: 15000 });
+      } catch (addErr) {
+        await dismissBlockingDialogs(page, log);
+        const ens = (result.productCodeEnsured || []).slice(-1)[0];
+        if (ens && ens.code) await page.evaluate(v => { const e = document.querySelector('#product_code'); if (e) e.value = v; }, ens.code);
+        await page.locator('#add_product_btn').click({ force: true, timeout: 10000 });
+        (result.addProductForceClick = result.addProductForceClick || []).push({ line: i + 1, why: String(addErr.message || addErr).split('\n')[0] });
+      }
+      await page.waitForTimeout(2000);
+      await dismissBlockingDialogs(page, log);
       (result.afterAdd = result.afterAdd || []).push({ line: i + 1, series: await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null),
         dialogs: await page.evaluate(() => [...document.querySelectorAll('.modal, .ui-dialog, .swal2-popup, [role=dialog]')].filter(m => m.offsetParent || getComputedStyle(m).display === 'block').map(m => m.innerText.replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean)),
         rows: await page.evaluate(() => (window.products || []).length) });
       { const err = page.locator('.swal2-popup:visible, .modal:visible, .ui-dialog:visible').filter({ hasText: /Au aparut erori/i });
         if (await err.count()) { const t = (await err.first().innerText()).replace(/\s+/g, ' ').trim(); throw new Error(`SmartBill nu a adaugat linia ${i + 1} (${l.name}): ${t}`); } }
-      // "Doresti sa salvezi produsul in Nomenclator?" -> always "Nu": the invoice line must never create/rename a product
-      const ask = page.locator('.ui-dialog:visible').filter({ hasText: /Introducere in nomenclator/i });
-      if (await ask.count()) { await ask.locator('button', { hasText: /^\s*Nu\s*$/ }).first().click(); await page.waitForTimeout(1200); (result.nomenclatorDialog = result.nomenclatorDialog || []).push({ line: i + 1, answered: 'Nu' }); }
+      // Assert qty/price landed on the invoice row (rename / dialogs can silently drop them)
+      {
+        const row = await page.evaluate(() => {
+          const rows = (window.products || []).filter(p => !p.is_discount);
+          const p = rows[rows.length - 1];
+          if (!p) return null;
+          return { qty: p.quantity, price: p.price, name: p.product_name, code: p.product_code };
+        });
+        if (!row) throw new Error(`Linia ${i + 1} (${l.name}): dupa Add, window.products e gol`);
+        if (Number(row.qty) !== Number(l.qty)) throw new Error(`Linia ${i + 1} (${l.name}): cantitate pe factura=${row.qty}, trebuia ${l.qty}`);
+        if (Number(row.price) !== Number(l.price)) throw new Error(`Linia ${i + 1} (${l.name}): pret pe factura=${row.price}, trebuia ${l.price}`);
+        (result.afterAddAssert = result.afterAddAssert || []).push({ line: i + 1, ...row });
+      }
+      // "Doresti sa salvezi / actualizezi produsul in Nomenclator?" -> always "Nu"
+      const ask = page.locator('.ui-dialog:visible, .modal:visible, .swal2-popup:visible').filter({ hasText: /Introducere in nomenclator|Actualiz.*nomenclator|salvezi produsul|modific.*nomenclator/i });
+      if (await ask.count()) {
+        const nu = ask.locator('button, a.btn, .swal2-confirm, .swal2-cancel').filter({ hasText: /^\s*Nu\s*$/i });
+        if (await nu.count()) await nu.first().click();
+        else await ask.locator('button', { hasText: /Nu/i }).first().click().catch(() => {});
+        await page.waitForTimeout(1200);
+        (result.nomenclatorDialog = result.nomenclatorDialog || []).push({ line: i + 1, answered: 'Nu' });
+      }
+      // Immediately after add: never let SmartBill sync Carrefour line name back into the stock product.
+      // Changing #product_name while id is set marks add_product=true → renames nomenclator on save.
+      {
+        const shopifySku = String((l.smartbill && (l.smartbill.code || l.smartbill.Cod)) || '').trim();
+        const shopifyName = String((l.smartbill && (l.smartbill.name || l.smartbill.Denumire)) || '').replace(/&amp;/gi, '&').trim();
+        const lineIsCarrefourRename = !!(cfg.smartbill?.carrefourLineName && l.name
+          && shopifyName && softNorm(l.name) !== softNorm(shopifyName));
+        await page.evaluate(({ sku, detachId }) => {
+          const rows = window.products || [];
+          const p = rows[rows.length - 1];
+          if (!p || p.is_discount) return;
+          p.add_product = false;
+          if (sku) p.product_code = sku;
+          // Detach stock id when invoice line name ≠ nomenclator name (BT-153 Carrefour text on LINE only).
+          if (detachId) p.id = null;
+        }, { sku: shopifySku || null, detachId: lineIsCarrefourRename || !!l.freeText });
+      }
     }
-    // Same effect as answering "Nu" to SmartBill's "Doresti sa salvezi produsul in Nomenclator?": the line is invoiced as typed
-    // (Carrefour unit / description / code) and is NEVER written to the product list (add_product=false, no product id).
-    result.lineNomenclator = await page.evaluate(() => (window.products || []).map(p => { const was = { id: p.id, add_product: p.add_product }; if (!p.is_discount) { p.add_product = false; p.id = null; } return was; }));
+    // Final nomenclature gate (also re-applied in issueNow right before Spre salvare).
+    result.nomenclatorGate = await applyNomenclatorSafetyGate(page, plan, cfg);
+    result.lineNomenclator = result.nomenclatorGate.was;
+    result.lineState = result.nomenclatorGate.state;
     if (cfg.smartbill?.carrefourLineName) { const names = await page.evaluate(() => (window.products || []).map(p => p.product_name));
       plan.lines.forEach((l, i) => { if (names[i] !== l.name) throw new Error(`STOP: linia ${i + 1} are numele "${names[i]}" in loc de "${l.name}"`); }); }
-    // nomenclature gate: no line may be saved into the product list with changed data
-    result.lineState = await page.evaluate(() => (window.products || []).map(p => ({ name: p.product_name, um: p.measuring_unit, code: p.product_code, id: p.id, add_product: p.add_product, description: p.product_description })));
-    for (const [i, st] of result.lineState.entries()) {
-      const nom = plan.lines[i]?.smartbill || {}; const nomUm = nom['U.M.'] || 'buc'; const nomCode = nom.Cod ?? nom.code;
-      if (st.add_product && (!st.id || st.um !== nomUm || (nomCode != null && String(st.code) !== String(nomCode)))) throw new Error(`STOP: linia ${i + 1} ar salva/modifica produsul in nomenclator (${JSON.stringify(st)})`);
-    }
     result.seriesAtEnd = await page.$eval('#serie', e => e.selectedOptions[0]?.text.trim()).catch(() => null);
     if (!new RegExp(`^${plan.series.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\(`).test(result.seriesAtEnd || '')) throw new Error(`Seria s-a schimbat in ${result.seriesAtEnd}`);
     if (!(await page.evaluate(() => (window.products || []).length))) throw new Error('Nicio linie adaugata pe factura: ' + JSON.stringify(result.afterAdd));
@@ -356,11 +1335,19 @@ async function run(profile, opts = {}) {
     result.form = await page.evaluate(() => ({ rows: [...document.querySelectorAll('table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim()).filter(t => /\d/.test(t)).slice(0, 20),
       totals: (document.body.innerText.match(/Total[^\n]{0,80}/gi) || []).slice(0, 8) }));
 
+    // Free-text / SGR / Carrefour-renamed lines (stock id detached) have no gestiune link.
+    // SmartBill rejects save with: "Nu ai facut nicio achizitie... emite fara descarcare de gestiune."
+    const needsNoDischarge = plan.lines.some(l => l.freeText || isSgrDepositLine(l))
+      || (result.nomenclatorGate && result.nomenclatorGate.state || []).some(st => !st.id && !st.is_discount);
+    if (needsNoDischarge) {
+      result.descarcaGestiune = await disableStockDischarge(page, log);
+    }
+
     if (opts.probeSave && !issue) {
       await page.click('#saveInvoiceBtn'); await page.waitForTimeout(4000); result.probeShot = await shot('40-dupa-spre-salvare-BLOCAT');
       result.probe = await page.evaluate(() => [...document.querySelectorAll('button, a.btn, .modal:not([style*="none"]) *')].filter(e => e.offsetParent && /btn/.test(e.className) && e.innerText.trim()).map(e => `${e.tagName}#${e.id} ${e.innerText.trim().slice(0, 60)} .${String(e.className).slice(0, 50)}`).slice(0, 60));
     }
-    if (issue) result.issued = await issueNow(page, s, profile, order, shot, log, { draftOnly });
+    if (issue) result.issued = await issueNow(page, s, profile, order, shot, log, { draftOnly, plan, cfg });
   } catch (e) {
     result.error = e.message.split('\n')[0];
     await shot('99-eroare').catch(() => {});
@@ -385,17 +1372,43 @@ function checkDraftXml(x, order, unitCode = 'XPP') {
   const items = [...x.matchAll(/<cac:InvoiceLine\b[^>]*>([\s\S]*?)<\/cac:InvoiceLine>/g)].map(m => m[1]);
   const names = items.map(b => ((b.match(/<cac:Item>[\s\S]*?<cbc:Name>([^<]*)<\/cbc:Name>/) || [])[1] || '').trim());
   const units = items.map(b => (b.match(/<cbc:InvoicedQuantity[^>]*unitCode="([^"]+)"/) || [])[1] || null);
+  const qtys = items.map(b => parseFloat(((b.match(/<cbc:InvoicedQuantity[^>]*>([^<]*)<\/cbc:InvoicedQuantity>/) || [])[1] || '').replace(',', '.')));
+  const prices = items.map(b => {
+    const net = (b.match(/<cbc:PriceAmount[^>]*>([^<]*)<\/cbc:PriceAmount>/) || [])[1];
+    const line = (b.match(/<cbc:LineExtensionAmount[^>]*>([^<]*)<\/cbc:LineExtensionAmount>/) || [])[1];
+    return { net: parseFloat(String(net || '').replace(',', '.')), line: parseFloat(String(line || '').replace(',', '.')) };
+  });
   const want = order.lines.map(l => xmlEsc(String(l.name).trim()));
-  return { [String(order.orderNo).replace(/^0+/, '')]: x.includes(String(order.orderNo).replace(/^0+/, '')), [order.store.gln]: x.includes(String(order.store.gln)),
+  const linesWithQty = order.lines.filter(l => l.qty != null && Number(l.qty) > 0);
+  const linesWithPrice = order.lines.filter(l => l.price != null && Number(l.price) > 0);
+  const qtyOk = !linesWithQty.length || order.lines.every((l, i) => {
+    if (l.qty == null) return true;
+    const q = qtys[i];
+    return Number.isFinite(q) && Math.abs(q - Number(l.qty)) < 0.001;
+  });
+  const priceOk = !linesWithPrice.length || order.lines.every((l, i) => {
+    if (l.price == null) return true;
+    const p = prices[i];
+    if (!p || !Number.isFinite(p.net)) return false;
+    // PriceAmount is unit net; allow tiny float noise
+    if (Math.abs(p.net - Number(l.price)) < 0.02) return true;
+    // Some exporters put VAT-inclusive; accept line extension ≈ qty*price
+    if (l.qty != null && Number.isFinite(p.line) && Math.abs(p.line - Number(l.qty) * Number(l.price)) < 0.05) return true;
+    return false;
+  });
+  const out = { [String(order.orderNo).replace(/^0+/, '')]: x.includes(String(order.orderNo).replace(/^0+/, '')), [order.store.gln]: x.includes(String(order.store.gln)),
     [`linii=${want.length}`]: items.length === want.length, 'nume linie = descriere Carrefour (BT-153)': want.length > 0 && want.every(w => names.includes(w)),
     [`U.M. ${unitCode}`]: units.length > 0 && units.every(u => u === unitCode) };
+  if (linesWithQty.length) out['cantitati = comanda'] = qtyOk;
+  if (linesWithPrice.length) out['preturi = comanda'] = priceOk;
+  return out;
 }
 
 const kerr = (code, msg, extra = {}) => Object.assign(new Error(msg), { code, ...extra });
 // Indirection so the offline tests can replace the SmartBill-touching steps (XML preview, final save, report lookups) with mocks.
 const D = { downloadXml: (...a) => downloadXml(...a), finalizeDraft: (...a) => finalizeDraft(...a), readReport: (...a) => readInvoiceReport(...a) };
 
-async function issueNow(page, s, profile, order, shot, log, { draftOnly = false } = {}) {
+async function issueNow(page, s, profile, order, shot, log, { draftOnly = false, plan = null, cfg = null } = {}) {
   const ledgerFile = path.join(profile.dirs.out, draftOnly ? 'drafts.json' : 'issued.json');
   const { readLedger } = require('./fsx'); const nzk = k => String(k).replace(/^0+/, '');
   const L = readLedger(ledgerFile); const prevKey = Object.keys(L).find(k => nzk(k) === nzk(order.orderNo));
@@ -403,6 +1416,14 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   // merge-save: re-read the file and replace ONLY this order, so a parallel run never loses entries
   const save = () => { const cur = readLedger(ledgerFile); cur[order.orderNo] = L[order.orderNo]; wf(ledgerFile, JSON.stringify(cur, null, 2)); };
   L[order.orderNo] = { status: 'pending', at: new Date().toISOString() }; save();
+  // Re-assert nomenclator safety immediately before Spre salvare (SmartBill may flip add_product back on).
+  if (plan && cfg) {
+    const gate = await applyNomenclatorSafetyGate(page, plan, cfg);
+    log(`Nomenclator gate pre-salvare: ${gate.state.length} linii, add_product=${gate.state.map(x => !!x.add_product)}, ids=${gate.state.map(x => x.id)}`);
+  } else {
+    // Fallback: force every line add_product=false even without plan context
+    await page.evaluate(() => { for (const p of (window.products || [])) { if (!p.is_discount) p.add_product = false; } });
+  }
   const before = page.url();
   s.guard.writeRe = /^\/documente\/(emitere\/factura|validare_data)\/?$/i;
   const respP = page.waitForResponse(r => r.request().method() === 'POST' && /\/documente\/emitere\/factura\/?$/.test(new URL(r.url()).pathname), { timeout: 60000 }).catch(() => null);
@@ -418,14 +1439,15 @@ async function issueNow(page, s, profile, order, shot, log, { draftOnly = false 
   let jb = null; try { jb = JSON.parse(body || ''); } catch {}
   const m = jb && jb.id ? [null, String(jb.id)] : (after.match(/\/(?:raport|compact-view)\/factura\/(\d+)/) || (body || '').match(/factura\/(\d+)/) || []);
   const num = (info.title.match(/nr\.?\s*0*(\d+)/i) || [])[1] || null;
+  const sbErr = jb && (jb.errorText || jb.message) ? String(jb.errorText || jb.message).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : null;
   const rec = { status: jb && jb.successfully ? (jb.is_draft ? 'draft-saved' : 'issued') : 'unknown', at: new Date().toISOString(), httpStatus: resp ? resp.status() : null, invoiceId: m[1] || null, number: num, urlBefore: before, urlAfter: after,
-    responseSnippet: (body || '').slice(0, 1500), writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
+    responseSnippet: (body || '').slice(0, 1500), smartbillError: sbErr || null, writes: s.guard.writes.map(w => `${w.method} ${w.url}`) };
   L[order.orderNo] = rec; save();
   rec.shot = await shot(draftOnly ? '50-ciorna-salvata' : '50-factura-emisa');
   wf(path.join(path.dirname(rec.shot), 'after-issue-page.json'), JSON.stringify(info, null, 2));
   wf(path.join(path.dirname(rec.shot), 'issue-post.txt'), (s.guard.writes.find(w => /emitere\/factura/.test(w.url)) || {}).post || '');
-  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId })}`);
-  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
+  log(`SALVAT: ${JSON.stringify({ status: rec.status, invoiceId: rec.invoiceId, smartbillError: sbErr || undefined })}`);
+  if (draftOnly && rec.status !== 'draft-saved') { L[order.orderNo] = rec; save(); throw kerr('SAVE_UNKNOWN', `STOP: am apasat "Spre salvare" pentru comanda ${order.orderNo}, dar SmartBill nu a confirmat ciorna (stare ${rec.status}${rec.httpStatus ? ', HTTP ' + rec.httpStatus : ''}, id ${rec.invoiceId || '?'}${sbErr ? ': ' + sbErr : ''}). Verifica in SmartBill > Rapoarte > Facturi > Filtrare > Ciorna (si Facturi); nu reincerc automat.`, { invoiceId: rec.invoiceId }); }
   // AUTOMAT / --issue: the ONLY accepted path is "draft saved with an id" -> XML checks -> final save. Anything else = doubt -> stop.
   // The ledger entry stays, so the order is never saved again automatically (no retry of a save whose result is unknown).
   if (!draftOnly && !(rec.status === 'draft-saved' && rec.invoiceId)) {
@@ -547,4 +1569,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct, vatTextsMatch };
