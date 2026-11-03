@@ -95,12 +95,34 @@ function info(root) {
     `Browser instalat: ${fs.existsSync(path.join(root, '.runtime', 'browsers')) ? 'da' : 'nu'}`, `Biblioteci instalate: ${fs.existsSync(path.join(root, 'node_modules', 'playwright')) ? 'da' : 'nu'}`,
     `Configurare (.env) exista: ${fs.existsSync(path.join(root, '.env')) ? 'da' : 'nu'}`, `Verificare automata programata: ${sched}`].join('\n');
 }
+/** Last bulk-ciorne errors (opt. 9 exits 1 without writing ultima-eroare.txt). */
+function bulkErrorsSummary(root) {
+  let outs = []; try { outs = fs.readdirSync(path.join(root, 'out')).filter(d => fs.statSync(path.join(root, 'out', d)).isDirectory()); } catch {}
+  const blocks = [];
+  for (const d of outs) {
+    const p = path.join(root, 'out', d, 'bulk-ciorne-ultimul-raport.json');
+    if (!fs.existsSync(p)) continue;
+    try {
+      const r = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const errs = r.errors || [];
+      if (!errs.length && !(r.exit > 0)) continue;
+      const lines = [`[${d}] la ${r.at || '?'} exit=${r.exit} create=${(r.created || []).length} erori=${errs.length}`];
+      for (const e of errs.slice(0, 20)) lines.push(`  ${e.orderNo || '-'}: ${e.error || '?'}`);
+      if (errs.length > 20) lines.push(`  … +${errs.length - 20} erori`);
+      if (r.stopped) lines.push(`  oprit: ${r.stopped}`);
+      blocks.push(lines.join('\n'));
+    } catch (e) { blocks.push(`[${d}] bulk-ciorne-ultimul-raport DETERIORAT: ${e.message.split('\n')[0]}`); }
+  }
+  return blocks.length ? blocks.join('\n') : '(nicio eroare in bulk-ciorne-ultimul-raport)';
+}
 /** Builds the support ZIP. Returns { file, count, text }. */
 function run({ root = ROOT, dest = null } = {}) {
   const vals = secretValues(root); const sel = pick(collect(root)); const files = sel.files;
   const last = tail(path.join(root, 'logs', 'ultima-eroare.txt'), 40) || '(nicio eroare inregistrata)';
   const rez = [info(root), '', '== Ultimele optiuni alese din meniu ==', tail(path.join(root, 'logs', 'meniu-istoric.log'), 15) || '(niciuna)', '',
-    '== Ultima eroare (cu caseta CE FACI) ==', last, '', '== Registre (stare) ==', ledgers(root), '', '== Verificare instalare (selftest) ==', selftestSummary(root), '',
+    '== Ultima eroare (cu caseta CE FACI) ==', last, '',
+    '== Ultimele erori ciorne in bloc (opt. 9) ==', bulkErrorsSummary(root), '',
+    '== Registre (stare) ==', ledgers(root), '', '== Verificare instalare (selftest) ==', selftestSummary(root), '',
     '== Continut ==', 'logs/ = jurnale, out/ = rapoarte + poze login-diag, profil/ = setari FARA parole. Parolele, emailurile si sesiunile au fost inlocuite cu ***.', sel.skipped ? `(${sel.skipped} fisiere mai vechi de 30 de zile sau peste limita de marime nu au fost incluse.)` : ''].join('\n');
   const entries = [{ name: 'REZUMAT.txt', data: Buffer.from(redact(rez, vals)) }];
   for (const f of files) { try { entries.push({ name: f.r, data: /\.png$/i.test(f.r) ? fs.readFileSync(f.p) : Buffer.from(redact(fs.readFileSync(f.p, 'utf8'), vals)) }); } catch {} }

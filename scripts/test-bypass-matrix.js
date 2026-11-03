@@ -153,6 +153,21 @@ T('M05e', 'SGR: catalog doar junk PET/sticla → null (NEEDS_HUMAN)', () => {
   return 'junk SGR catalog → null';
 });
 
+T('M05g', 'Pin PT NU se aplica pe alt producator (Pofta Focului): EAN 3162 nu forțează id PT', () => {
+  const { eanPinForCatalog } = require('../src/productMatch');
+  const foreign = [
+    { id: '111', Cod: 'ZAC-VINETE', Denumire: 'Zacusca de vinete 300g', 'Cota TVA': '11' },
+    { id: '222', Cod: 'SGR-AMBALAJ', Denumire: 'Garantie ambalaj SGR', 'Cota TVA': '0' },
+  ];
+  assert(Object.keys(eanPinForCatalog(foreign)).length === 0, 'pin must be empty for foreign catalog');
+  const m = matchLine({ name: 'GARANTIE SGR PET', ean: '3162', vat: 0, price: 0.5 }, foreign, {});
+  assert(!(m && String(m.id) === '53098696'), 'must not return Pure Therapy SGR id: ' + JSON.stringify(m));
+  assert(!(m && m.how && /stocPin/.test(m.how)), 'must not stocPin on foreign account: ' + JSON.stringify(m));
+  // Local SGR service should win via fuzzy
+  assert(m && String(m.id) === '222' && m.code === 'SGR-AMBALAJ', JSON.stringify(m));
+  return 'foreign catalog isolated from PT pin';
+});
+
 T('M05', 'pinAgrees: toate perechile exclusive de gust se resping reciproc', () => {
   const pairs = [
     [{ name: 'KOMBUCHA MENTOLIME 500ML' }, pin[Object.keys(pin).find(k => pin[k].sku === 'ghimbirutaF500')]],

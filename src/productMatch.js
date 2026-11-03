@@ -29,7 +29,9 @@ const ALIAS = {
   STICLA: ['STICLA', 'STICLA'],
 };
 
-/** EAN → { sku, name, id } from issued Carrefour stock invoices (products they already use). */
+/** EAN → { sku, name, id } from issued Carrefour stock invoices (Pure Therapy / Furori).
+ *  NEVER apply blindly on every producer: short codes like 3162/3164 (SGR) would force
+ *  Pure Therapy SmartBill ids onto Pofta Focului / Delios / etc. and break bulk ciorne. */
 let EAN_PIN = null;
 function loadEanPin() {
   if (EAN_PIN) return EAN_PIN;
@@ -39,6 +41,27 @@ function loadEanPin() {
     EAN_PIN = {};
   }
   return EAN_PIN;
+}
+
+/**
+ * Subset of the shipped EAN pin that belongs to THIS SmartBill account.
+ * A pin entry is active only if its stock id or SKU exists in the current product list.
+ * Other producers (zacuscă, jerky, …) get an empty table → normal fuzzy/profile match.
+ */
+function eanPinForCatalog(products) {
+  const all = loadEanPin();
+  const list = products || [];
+  if (!list.length) return {};
+  const ids = new Set(list.map(p => String(p.id)));
+  const skus = new Set(list.map(p => String(p.Cod ?? p.code ?? '').trim()).filter(Boolean));
+  const active = {};
+  for (const [ean, pin] of Object.entries(all)) {
+    if (!pin) continue;
+    const idOk = pin.id != null && ids.has(String(pin.id));
+    const skuOk = pin.sku && skus.has(String(pin.sku).trim());
+    if (idOk || skuOk) active[ean] = pin;
+  }
+  return active;
 }
 
 function expand(toks) {
@@ -254,9 +277,9 @@ function matchLine(line, products, pinned = {}) {
     // Stale/wrong profile pin → fall through to stocPin / fuzzy (never return empty SKU)
   }
 
-  // 2) Hard pin from issued stock invoices = their real SmartBill products
+  // 2) Hard pin from issued stock invoices — ONLY entries present in THIS account's catalog
   const eanKey = String(line.ean || '').replace(/\D/g, '').replace(/^0+/, '') || String(line.ean || '').trim();
-  const pinTable = loadEanPin();
+  const pinTable = eanPinForCatalog(products);
   const pin = pinTable[eanKey] || pinTable[String(line.ean || '').trim()];
   if (pin && pinAgreesWithLine(line, pin)) {
     const p = findBySkuOrId(products, pin);
@@ -269,8 +292,9 @@ function matchLine(line, products, pinned = {}) {
         how: 'stocPin',
       };
     }
-    // Pin known but product list stale — still return pin only if brand family agrees with the pin SKU itself.
-    if (pin.id && pin.sku && brandFamilyAgree(line, { Cod: pin.sku, Denumire: pin.name || '' })) {
+    // Pin SKU/id is in this catalog (eanPinForCatalog) but findBySkuOrId missed — still bind only if id is local
+    if (pin.id && pin.sku && products.some(x => String(x.id) === String(pin.id))
+      && brandFamilyAgree(line, { Cod: pin.sku, Denumire: pin.name || '' })) {
       return { id: String(pin.id), name: pin.name || null, code: pin.sku, how: 'stocPin-only' };
     }
   }
@@ -312,4 +336,4 @@ function matchLine(line, products, pinned = {}) {
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
-module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, pinAgreesWithLine, flavorKey };
+module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, eanPinForCatalog, pinAgreesWithLine, flavorKey };

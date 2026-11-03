@@ -132,6 +132,18 @@ async function run(profile, { check = false, confirm = null, batch = 10, log = c
     rep.text = reportText(rep); L(rep.text);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     wf(path.join(out, `bulk-ciorne-${stamp}.json`), JSON.stringify(rep, null, 2)); wf(path.join(out, 'bulk-ciorne-ultimul-raport.json'), JSON.stringify(rep, null, 2));
+    // Opt. 9 catches per-order errors (exit 1) without throwing — mirror them into ultima-eroare for support ZIPs.
+    if (rep.errors && rep.errors.length) {
+      try {
+        const logsDir = path.join(profile.root, 'logs');
+        fs.mkdirSync(logsDir, { recursive: true });
+        const lines = [`[${new Date().toLocaleString('ro-RO')}] comanda: bulk-ciorne | cod ${rep.exit}`,
+          `EROARE: ${rep.errors.length} comenzi esuate la ciorne in bloc`,
+          ...rep.errors.slice(0, 30).map(e => `  ${e.orderNo || '-'}: ${e.error || '?'}`),
+          rep.stopped ? `oprit: ${rep.stopped}` : ''].filter(Boolean);
+        fs.writeFileSync(path.join(logsDir, 'ultima-eroare.txt'), lines.join('\n') + '\n');
+      } catch {}
+    }
   }
   return rep;
 }
