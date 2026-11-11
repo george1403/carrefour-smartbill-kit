@@ -17,6 +17,16 @@ const dmy = iso => { const [y, m, d] = String(iso).split('-'); return { d, m, y 
 const todayIso = () => { const t = new Date(); return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`; };
 const addDays = (iso, n) => { const t = new Date(iso + 'T12:00:00'); t.setDate(t.getDate() + n); return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`; };
 const rnd15 = () => { let s = String(1 + Math.floor(Math.random() * 9)); while (s.length < 15) s += Math.floor(Math.random() * 10); return s; };
+/** True when the delivery-address input reflects the store (not SmartBill's "Fara adresa de livrare"). */
+function addressLooksSelected(cur, store) {
+  const c = String(cur || '').trim();
+  if (!c || /^fara adresa/i.test(c)) return false;
+  const streetKey = String((store && store.street) || '').slice(0, 12);
+  const nameKey = String((store && store.name) || '').replace(/\s+/g, ' ').trim();
+  const gln = String((store && store.gln) || '');
+  return (gln && c.includes(gln)) || (nameKey && c.toUpperCase().includes(nameKey.toUpperCase().slice(0, 18)))
+    || (streetKey && c.toUpperCase().includes(streetKey.toUpperCase()));
+}
 
 // Timeouts are generous for slower computers; KIT_SLOW=2 doubles them.
 const SLOW = Math.max(1, Number(require('./testenv').hook('KIT_SLOW') || 1));
@@ -1045,29 +1055,43 @@ async function run(profile, opts = {}) {
     await dismissNotices(page);
     // BT-70 = store name only; the GLN goes ONLY in "Identif. loc livrare" (BT-71), like DocProcess
     const label = order.store.name;
-    const known = await page.evaluate(async ([cid, gln]) => new Promise(res => window.$.ajax({ url: '/nomenclator/delivery-addresses/get-list/', dataType: 'json', type: 'POST', cache: false, data: { clientId: cid } })
-      .done(r => res((r.addresses || []).filter(a => a.locationId === gln && !a.isDeleted))).fail(() => res([]))), [cfg.smartbill?.carrefourClientId || Number(((fs.existsSync(disc) ? JSON.parse(fs.readFileSync(disc, 'utf8')).carrefourClients : [])[0] || {}).raw?.col7) || 0, order.store.gln]).catch(() => []);
+    const clientId = cfg.smartbill?.carrefourClientId || Number(((fs.existsSync(disc) ? JSON.parse(fs.readFileSync(disc, 'utf8')).carrefourClients : [])[0] || {}).raw?.col7) || 0;
+    const fetchAddrsByGln = async (gln) => page.evaluate(async ([cid, g]) => new Promise(res => window.$.ajax({ url: '/nomenclator/delivery-addresses/get-list/', dataType: 'json', type: 'POST', cache: false, data: { clientId: cid } })
+      .done(r => {
+        const want = String(g || '').replace(/\D/g, '');
+        res((r.addresses || []).filter(a => !a.isDeleted && String(a.locationId || '').replace(/\D/g, '') === want));
+      }).fail(() => res([]))), [clientId, gln]).catch(() => []);
+    const setAddr = async (a) => {
+      await page.keyboard.press('Escape').catch(() => {});
+      const ok = await page.evaluate(addr => { try { window.SmartBill.require('js/src/issuing/delivery-address/utils').setDeliveryAddress(addr); return true; } catch (e) { return String(e); } }, a);
+      await page.waitForTimeout(T(1200));
+      const sel = await page.evaluate(() => { try { return window.SmartBill.require('js/src/issuing/delivery-address/utils').getSelectedDeliveryAddrId(); } catch (e) { return null; } });
+      return { ok, sel };
+    };
+    let known = await fetchAddrsByGln(order.store.gln);
     result.knownAddresses = known.map(a => ({ id: a.id, description: a.description, locationId: a.locationId }));
-    await page.click('#client_delivery_address_input'); await page.waitForTimeout(1500);
-    if (known[0]) { await page.locator('#client_delivery_address_input').pressSequentially(known[0].description.slice(0, 18), { delay: 50 }); await page.waitForTimeout(2500); }
+    await page.click('#client_delivery_address_input'); await page.waitForTimeout(T(1500));
+    if (known[0]) { await page.locator('#client_delivery_address_input').pressSequentially(String(known[0].description || '').slice(0, 18), { delay: 50 }); await page.waitForTimeout(T(2500)); }
     result.addressItems = await page.evaluate(() => [...document.querySelectorAll('ul.ui-autocomplete li')].filter(e => e.offsetParent).map(e => e.innerText.replace(/\s+/g, ' ').trim()).slice(0, 10));
     const streetRe = new RegExp(String(order.store.street || order.store.gln).slice(0, 12).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-    let existing = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter({ hasText: order.store.gln });
+    let existing = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter({ hasText: String(order.store.gln || '') });
     if (!(await existing.count()) && known[0]) existing = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter({ hasText: known[0].description }).filter({ hasText: String(known[0].address || '').slice(0, 10) });
     if (!(await existing.count())) existing = page.locator('ul.ui-autocomplete:visible li.ui-menu-item').filter({ hasText: streetRe });
     if (await existing.count()) { await existing.first().click(); result.deliveryAddress = 'existenta'; }
     else if (known[0]) {
-      // the address list does not appear in the dropdown: select the known address with SmartBill's own setter (same call it makes after "Adauga")
-      await page.keyboard.press('Escape').catch(() => {});
-      const ok = await page.evaluate(a => { try { window.SmartBill.require('js/src/issuing/delivery-address/utils').setDeliveryAddress(a); return true; } catch (e) { return String(e); } }, known[0]);
-      await page.waitForTimeout(1200);
-      const sel = await page.evaluate(() => { try { return window.SmartBill.require('js/src/issuing/delivery-address/utils').getSelectedDeliveryAddrId(); } catch (e) { return null; } });
+      // dropdown empty/hidden: use SmartBill setter (same as after "Adauga")
+      const { ok, sel } = await setAddr(known[0]);
       if (ok !== true || String(sel) !== String(known[0].id)) throw new Error(`Adresa de livrare existenta nu s-a putut selecta (${ok}, selectat=${sel})`);
       result.deliveryAddress = `existenta (id ${sel}: ${known[0].description})`;
     }
     else {
-      await page.locator('ul.ui-autocomplete:visible li.client-add-new').first().click(); await page.waitForTimeout(2000);
-      await page.fill('#mida-name', label);
+      if (!(order.store.street || order.store.city)) {
+        throw Object.assign(new Error(`Magazinul GLN ${order.store.gln} (${order.store.name || '?'}) nu are strada/localitate in data/carrefour-stores.json. Adauga-l cu streetName+buildingNumber+cityName+county (sau street+city) si reincearca.`), { code: 'CONFIG' });
+      }
+      const addNew = page.locator('ul.ui-autocomplete:visible li.client-add-new').first();
+      if (!(await addNew.count())) throw new Error('Nu apare optiunea "Adauga" pentru adresa de livrare in SmartBill (client Carrefour?).');
+      await addNew.click(); await page.waitForTimeout(T(2000));
+      await page.fill('#mida-name', label || String(order.store.gln));
       await page.fill('#mida-address', order.store.street || order.store.name);
       const rawCity = order.store.city || ''; const sector = (order.store.rawCity || '').match(/Sector\s*\d/i) || (JSON.stringify(order.store).match(/Sector\s*\d/i));
       const county = order.store.county || (/bucuresti/i.test(rawCity) ? 'Bucuresti' : null);
@@ -1079,17 +1103,45 @@ async function run(profile, opts = {}) {
         cityOk = await typeAndPick(page, '#mida-city-input', q, { hasText: roRe(cityQ, { start: true }) }).then(() => true).catch(() => false); }
       if (!cityOk) { await page.fill('#mida-city-input', cityQ); result.cityWarning = `localitatea "${cityQ}" nu a aparut in lista SmartBill; scrisa direct`; }
       result.city = await page.inputValue('#mida-city-input').catch(() => null); result.county = await page.inputValue('#mida-county-input').catch(() => null);
-      await page.fill('#mida-location-id', order.store.gln);
+      await page.fill('#mida-location-id', String(order.store.gln || ''));
       await typeAndPick(page, '#mida-location-type-id-input', '0088', { hasText: '0088' }).catch(e => log('tip GLN: ' + e.message.split('\n')[0]));
       await shot('10-adresa-livrare');
       if (issue) {
         s.guard.writeRe = /^\/nomenclator\/delivery-addresses\/[a-z_-]+\/?$/i;
-        await page.locator('.modal:visible a.btn-primary', { hasText: 'Adauga' }).first().click(); await page.waitForTimeout(3500);
+        await page.locator('.modal:visible a.btn-primary', { hasText: 'Adauga' }).first().click(); await page.waitForTimeout(T(3500));
+        // confirm / warning dialogs after Adauga (recurrency etc.)
+        await dismissNotices(page);
+        const modalErr = await page.evaluate(() => {
+          const m = [...document.querySelectorAll('.modal:visible, .ui-dialog:visible, .swal2-popup:visible')].find(e => e.offsetParent);
+          return m ? (m.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 400) : '';
+        }).catch(() => '');
+        if (modalErr && /eroare|obligator|completa|invalid/i.test(modalErr) && !/adauga/i.test(modalErr)) {
+          s.guard.writeRe = null;
+          throw new Error(`SmartBill a refuzat adresa de livrare noua: ${modalErr}`);
+        }
+        // if a confirm is still up, accept primary
+        const confirm = page.locator('.modal:visible a.btn-primary, .ui-dialog:visible button.ui-button, .swal2-confirm').filter({ hasText: /Adauga|Da|OK|Salveaza|Continua/i });
+        if (await confirm.count()) { await confirm.first().click().catch(() => {}); await page.waitForTimeout(T(2500)); await dismissNotices(page); }
         s.guard.writeRe = null;
-        const cur = await page.inputValue('#client_delivery_address_input').catch(() => '');
-        const streetKey = String(order.store.street || '').slice(0, 12);
-        if (!(cur.includes(order.store.gln) || cur.includes(order.store.name) || (streetKey && cur.toUpperCase().includes(streetKey.toUpperCase())))) throw new Error(`Adresa de livrare nu s-a selectat dupa adaugare (acum: "${cur}")`);
-        result.deliveryAddress = 'adaugata la clientul Carrefour';
+        let cur = await page.inputValue('#client_delivery_address_input').catch(() => '');
+        if (!addressLooksSelected(cur, order.store)) {
+          // Adauga often leaves "Fara adresa de livrare" even when the address was saved — re-fetch + setter
+          known = await fetchAddrsByGln(order.store.gln);
+          result.knownAddressesAfterAdd = known.map(a => ({ id: a.id, description: a.description, locationId: a.locationId }));
+          if (known[0]) {
+            const { ok, sel } = await setAddr(known[0]);
+            cur = await page.inputValue('#client_delivery_address_input').catch(() => '');
+            if (ok === true && (String(sel) === String(known[0].id) || addressLooksSelected(cur, order.store))) {
+              result.deliveryAddress = `adaugata la clientul Carrefour (id ${sel})`;
+            } else {
+              throw new Error(`Adresa de livrare nu s-a selectat dupa adaugare (acum: "${cur}", setter=${ok}, selectat=${sel})`);
+            }
+          } else {
+            throw new Error(`Adresa de livrare nu s-a selectat dupa adaugare (acum: "${cur}")${modalErr ? ' | modal: ' + modalErr : ''}`);
+          }
+        } else {
+          result.deliveryAddress = 'adaugata la clientul Carrefour';
+        }
       } else { await page.locator('.modal:visible a.btn-secondary', { hasText: 'Renunta' }).first().click(); result.deliveryAddress = 'NEADAUGATA (fill-only: ar fi adaugata la emitere)'; }
     }
 
@@ -1569,4 +1621,4 @@ async function finalizeFromLedger(profile, orderNo, opts = {}) {
   } finally { await s.browser.close(); }
 }
 
-module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct, vatTextsMatch };
+module.exports = { _deps: D, _alreadyIssued: (...a) => alreadyIssued(...a), issueNow, checkDraftXml, roRe, readInvoiceReport, classify, run, addDays, todayIso, finalizeFromLedger, downloadDocs, dismissNotices, pickExistingProduct, typeAndPickProduct, resolveVatOption, pickSearchAttempts, isSgrDepositLine, sameCarrefourUnit, forceSelectKnownProduct, applyNomenclatorSafetyGate, ensureLineGestiune, verifyPickedProduct, vatTextsMatch, addressLooksSelected };

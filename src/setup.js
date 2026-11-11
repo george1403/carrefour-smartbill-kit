@@ -155,7 +155,14 @@ async function run({ dryRun = false } = {}) {
   }
   const carrefour = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/carrefour.json'), 'utf8'));
   const storeTable = JSON.parse(fs.readFileSync(path.join(ROOT, carrefour.storesFile), 'utf8'));
-  const stores = (cfData.stores || []).map(s => ({ ...s, ...(storeTable[s.gln] ? { address: storeTable[s.gln] } : { addressMissing: true }) }));
+  const dig = x => String(x == null ? '' : x).replace(/\D/g, '');
+  const findStoreRow = gln => {
+    if (storeTable[gln]) return storeTable[gln];
+    const want = dig(gln); if (!want) return null;
+    for (const [k, row] of Object.entries(storeTable)) if (dig(k) === want) return row;
+    return null;
+  };
+  const stores = (cfData.stores || []).map(s => { const row = findStoreRow(s.gln); return { ...s, ...(row ? { address: row } : { addressMissing: true }) }; });
   const products = matchProducts(sb.products || [], cfData.products || []);
 
   const cfg = {

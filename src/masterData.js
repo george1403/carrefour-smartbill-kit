@@ -50,7 +50,7 @@ async function run(profile, opts = {}) {
 
     const plan = [];
     for (const a of before.deliveryAddresses) if (stripGln(a.description) !== a.description) plan.push({ kind: 'rename-address', id: a.id, from: a.description, to: stripGln(a.description) });
-    if (store && !before.deliveryAddresses.some(a => a.locationId === store.gln)) plan.push({ kind: 'add-address', store });
+    if (store && !before.deliveryAddresses.some(a => String(a.locationId || '').replace(/\D/g, '') === String(store.gln || '').replace(/\D/g, '') && String(store.gln || '').replace(/\D/g, '') !== '')) plan.push({ kind: 'add-address', store });
     const CODE = cf.unitCode || 'XPP';
     if (unit && !before.mappedUnits.some(m => m.mu === unit && m.mapping === CODE)) plan.push({ kind: 'map-unit', mu: unit, mapping: CODE, from: (before.mappedUnits.find(m => m.mu === unit) || {}).mapping || null });
     if (phone && before.company.phone !== phone) plan.push({ kind: 'company-phone', from: before.company.phone, to: phone });

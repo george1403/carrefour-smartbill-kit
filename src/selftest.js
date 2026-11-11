@@ -48,6 +48,8 @@ async function run() {
   } catch (e) { no('pin vs nume: ' + e.message); }
   try { const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-automat.js')], { encoding: 'utf8', timeout: 120000 }); const last = (r.stdout || '').trim().split('\n').pop();
     (r.status === 0 ? ok : no)(`mod automat (teste offline, SmartBill simulat, nimic emis): ${last}${r.status === 0 ? '' : ' ' + (r.stdout || '').split('\n').filter(l => /^FAIL/.test(l)).join(' | ').slice(0, 800)}`); } catch (e) { no('mod automat: ' + e.message); }
+  try { const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-delivery-address.js')], { encoding: 'utf8', timeout: 30000 }); const last = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
+    (r.status === 0 ? ok : no)(`adresa livrare (magazine adaugate): ${last}${r.status === 0 ? '' : ' ' + (r.stdout || '').split('\n').filter(l => /^FAIL/.test(l)).join(' | ').slice(0, 500)}`); } catch (e) { no('adresa livrare: ' + e.message); }
   // Full Pure Therapy bypass matrix (match/VAT/pick/SGR/DOM) — works from ZIP via pin stand-in when out/ missing.
   try {
     const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'test-bypass-matrix.js')], { encoding: 'utf8', timeout: 120000 });
