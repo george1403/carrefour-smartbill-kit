@@ -121,6 +121,26 @@ function brandFamilyAgree(line, p) {
 }
 
 /**
+ * Shopify pack SKUs (5V, 9V, 17V, 1Pork_5) vs the 1-bag unit Carrefour invoices.
+ * Carrefour ORIG BEEF 50G must land on SKU 1 / 1V, not the 4+1 / 7+2 packs.
+ */
+function skuUnitRank(code, name) {
+  const c = String(code || '').trim();
+  const n = String(name || '');
+  if (BUNDLE.test(n)) return -40;
+  if (/1\s*punga/i.test(n) && !BUNDLE.test(n)) return 28;
+  if (/^(1V|1PUI_1|1PORK_1|1AMERICAN_1|1STICKS_1)$/i.test(c)) return 26;
+  if (/^1$/i.test(c)) return 24;
+  if (/^11V$/i.test(c)) return 18;
+  const packV = c.match(/^(\d+)V$/i);
+  if (packV && Number(packV[1]) > 1) return -30;
+  const packUnd = c.match(/_(\d+)$/);
+  if (packUnd && Number(packUnd[1]) > 1) return -30;
+  if (/^\d{3,}$/.test(c)) return -8; // 102 / 1102 warehouse-ish
+  return 0;
+}
+
+/**
  * Stock brand preference from their real invoices:
  * Furori (sokata/zmeura/passion/ghimbiruta/mentolime) and ikombucha classics.
  * EVA is a different catalog line — do NOT prefer it for Carrefour.
@@ -162,6 +182,13 @@ function flavorKey(s) {
   if (!N) return null;
   if (/GARANTIE|SGR/.test(N) && /PET|PLASTIC/.test(N)) return 'SGR_PET';
   if (/GARANTIE|SGR/.test(N) && /STICL/.test(N)) return 'SGR_STICLA';
+  // Carpathian Jerky — Carrefour lines vs Shopify pack SKUs (5V/9V/102)
+  if (/STICK|MAXI/.test(N)) return 'JERKY_STICKS';
+  if (/AMERICAN/.test(N)) return 'JERKY_AMERICAN';
+  if (/PORK|PORC/.test(N)) return 'JERKY_PORK';
+  if (/CHICKEN|PUI/.test(N)) return 'JERKY_CHICKEN';
+  if (/EURO STYLE|CRISPY/.test(N)) return 'JERKY_EURO';
+  if (/\bBEEF\b|ORIG BEEF|ORIGINAL BEEF|VITA ORIG/.test(N)) return 'JERKY_BEEF';
   if (/MENTOLIME|MENTA.*LAMAI|LAMAI.*MENTA/.test(N)) return 'MENTOLIME';
   if (/GHIMBIRUTA|GHIMBIRUTAF/.test(N)) return 'GHIMBIRUTA';
   if (/\bGHIMBIR\b/.test(N)) return 'GHIMBIR_IK';
@@ -257,6 +284,9 @@ function score(line, p) {
   const br = brandRank(p);
   if (br) { s += Math.min(Math.max(br, -40), 50); why.push(br >= 45 ? 'stockBrand' : br < 0 ? 'notStock' : 'brand'); }
 
+  const unit = skuUnitRank(code, name);
+  if (unit) { s += unit; why.push(unit > 0 ? 'unitSku' : 'packSku'); }
+
   return { s, why, brand: br };
 }
 
@@ -330,10 +360,16 @@ function matchLine(line, products, pinned = {}) {
         return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') + '+tieFlavor' };
       }
     }
+    // Last resort: 1-bag Shopify unit vs pack SKUs that still tied
+    const unitSorted = same.slice().sort((a, b) => skuUnitRank(b.p.Cod, b.p.Denumire) - skuUnitRank(a.p.Cod, a.p.Denumire));
+    if (skuUnitRank(unitSorted[0].p.Cod, unitSorted[0].p.Denumire) > skuUnitRank(unitSorted[1].p.Cod, unitSorted[1].p.Denumire)) {
+      const r = unitSorted[0];
+      return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') + '+tieUnitSku' };
+    }
     return { ambiguous: same.slice(0, 4).map(r => `${r.p.id} ${r.p.Denumire} (${r.p.Cod})`) };
   }
   const r = ranked[0];
   return { id: String(r.p.id), name: r.p.Denumire, code: r.p.Cod, how: r.why.join('+') };
 }
 
-module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, eanPinForCatalog, pinAgreesWithLine, flavorKey };
+module.exports = { matchLine, tokens, gtin, score, expand, isJunkMirror, brandRank, brandFamilyAgree, loadEanPin, eanPinForCatalog, pinAgreesWithLine, flavorKey, skuUnitRank };

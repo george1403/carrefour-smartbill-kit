@@ -509,6 +509,32 @@ T('G02', 'ensureLineGestiune: pastreaza gestiunea deja selectata', async () => {
   return `kept ${info.text}`;
 });
 
+T('J01', 'Delios ORIG BEEF: SKU 1, nu pachetele 5V/9V/102', () => {
+  const catalog = [
+    { id: '13855449', Cod: '5V', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+    { id: '13855446', Cod: '9V', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+    { id: '9344328', Cod: '102', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+    { id: '9343081', Cod: '1', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+  ];
+  const m = matchLine({ name: 'CARPATHIAN JERKY ORIG BEEF 50G', ean: '704384350828', vat: 11 }, catalog, {});
+  assert(m && !m.ambiguous && String(m.id) === '9343081' && String(m.code) === '1', JSON.stringify(m));
+  return `→ ${m.code}#${m.id}`;
+});
+
+T('J02', 'Delios ORIG BEEF nu ia Chicken / American / pack 1 Punga vs pack 5V', () => {
+  const catalog = [
+    { id: 'c', Cod: '1Pui_1', Denumire: 'Carpathian Jerky Original Chicken - 1 punga cinstita', 'Cota TVA': '11' },
+    { id: 'a', Cod: '1American_1', Denumire: 'Carpathian Jerky American Style - 1 punga cinstita', 'Cota TVA': '11' },
+    { id: '5v', Cod: '5V', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+    { id: '1v', Cod: '1V', Denumire: 'Carpathian Jerky Original Beef', 'Cota TVA': '11' },
+  ];
+  const m = matchLine({ name: 'CARPATHIAN JERKY ORIG BEEF 50G', ean: '704384350828', vat: 11 }, catalog, {});
+  assert(m && !m.ambiguous && String(m.id) === '1v' && String(m.code) === '1V', JSON.stringify(m));
+  const ch = matchLine({ name: 'CARPATHIAN JERKY CHICKEN 50G', ean: '704384350835', vat: 11 }, catalog, {});
+  assert(ch && String(ch.id) === 'c', JSON.stringify(ch));
+  return `beef→${m.code} chicken→${ch.code}`;
+});
+
 T('S01', 'forbiddenValues + KCRF absent din src shipped', () => {
   const { forbiddenValues } = require('../src/selftest');
   const v = forbiddenValues();
